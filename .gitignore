@@ -1,0 +1,41 @@
+__pycache__/
+*.py[cod]
+.idea/
+.vscode/
+.venv/
+.env
+.env.*
+!.env.example
+*.log
+
+# Runtime data, artifacts, reports, and local models.
+/data/
+/models/
+/reports/
+/train_data/
+/saves/
+/runs/
+/wandb/
+/outputs/
+/checkpoints/
+/server_env.sh
+/project_file_manifest.txt
+
+# LLaMA-Factory runtime artifacts. Keep source and dataset metadata only.
+LLaMA-Factory/saves/
+LLaMA-Factory/cache/
+LLaMA-Factory/data/*
+!LLaMA-Factory/data/.gitkeep
+LLaMA-Factory/data/papo/Raw
+LLaMA-Factory/data/papo/RawDataset
+LLaMA-Factory/data/papo/*.json
+
+# Generated configs are rendered from config.yaml and the renderer.
+configs/llamafactory/generated/
+
+# Model and training artifact formats.
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin

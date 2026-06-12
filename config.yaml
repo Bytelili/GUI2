@@ -1,0 +1,81 @@
+project:
+  name: papo
+  seed: 42
+paths:
+  project_root: ${PAPO_PROJECT_ROOT:-/home/dumike/zyy/GUI2}
+  fingertip_root: ${FINGERTIP_ROOT:-/home/dumike/zyy/GUI/data/raw/fingertip20k}
+  raw_root: ${PAPO_RAW_ROOT:-/home/dumike/zyy/GUI/data/raw/fingertip20k}
+  archive_root: ${FINGERTIP_ARCHIVE_ROOT:-/home/dumike/zyy/GUI/data/raw/fingertip20k}
+  official_root: ${FINGERTIP_OFFICIAL_ROOT:-/home/dumike/zyy/GUI2/data/official/fingertip20k}
+  work_dir: ${PAPO_WORK_DIR:-/home/dumike/zyy/GUI2/data/papo_config_run}
+  task_dir: ${PAPO_TASK_DIR:-/home/dumike/zyy/GUI2/data/papo_tasks}
+  llamafactory_dir: /home/dumike/zyy/GUI2/LLaMA-Factory
+  llamafactory_data_dir: /home/dumike/zyy/GUI2/LLaMA-Factory/data/papo
+  asset_prefix: RawDataset
+  qwen_model_path: ${QWEN_MODEL_PATH:-/home/dumike/zyy/GUI/backbone/Qwen2.5-VL-3B-Instruct}
+  checkpoint_root: ${PAPO_CHECKPOINT_ROOT:-/home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo}
+  logging_root: ${PAPO_LOGGING_ROOT:-/home/dumike/zyy/GUI2/runs/papo}
+data:
+  suggestion_split: train_set.csv
+  execution_split: test_execution.csv
+  retrieval_splits:
+  - train_set.csv
+  - test_execution.csv
+  require_complete: true
+  suggestion_screenshot_level: 3
+  suggestion_history_limit: 20
+  max_episodes: 0
+  max_episodes_per_user: 0
+  root_only: true
+  progress_every: 25
+papo:
+  tree:
+    max_depth: 3
+    same_user_k: 2
+    cross_user_k: 2
+    max_candidates: 6
+  references:
+    same_user_top_k: 5
+    cross_user_top_k: 5
+    different_age_group_negative: true
+    intent_similarity_threshold: 0.0
+    exclude_same_intent: true
+  reward:
+    eta: 0.5
+    evidence_transform: tanh_log_ratio
+    fingertip_temperature: 0.2
+    epsilon: 1.0e-06
+    min_same_user_references: 1
+    task_similarity_threshold: 0.5
+    require_finish: false
+  value:
+    conservative_alpha: 0.1
+    beta: 0.1
+    base_policy_prior: support
+  pairwise:
+    margin: 0.05
+    tau_m: 0.2
+    max_weight: 5.0
+  coverage:
+    kappa: 3.0
+training:
+  model_name_or_path: ${QWEN_MODEL_PATH:-/home/dumike/zyy/GUI/backbone/Qwen2.5-VL-3B-Instruct}
+  template: qwen2_vl
+  cutoff_len: 4096
+  image_max_pixels: 262144
+  lora_rank: 16
+  proactive_sft:
+    epochs: 3
+    learning_rate: 0.0001
+  execution_sft:
+    epochs: 3
+    learning_rate: 0.0001
+  execution_listwise:
+    epochs: 2
+    learning_rate: 1.0e-05
+    use_papo_listwise: true
+  execution_dpo:
+    epochs: 2
+    learning_rate: 5.0e-06
+    pref_beta: 0.1
+    pref_loss: papo
