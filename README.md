@@ -35,23 +35,34 @@ The simplest server workflow is:
 ```bash
 bash server/setup_server.sh
 RAW_ROOT=/datasets/FingerTip/Raw bash server/prepare_train_data.sh
-python scripts/08_validate_llamafactory_data.py \
-  --dataset_dir LLaMA-Factory/data/papo \
-  --check_images
-bash server/train.sh configs/llamafactory/generated/proactive_sft.yaml
-bash server/train.sh configs/llamafactory/generated/execution_sft.yaml
-bash server/train.sh configs/llamafactory/generated/execution_listwise.yaml
-bash server/train.sh configs/llamafactory/generated/execution_dpo.yaml
+bash server/train_auto_resume.sh configs/llamafactory/generated/proactive_sft.yaml
+bash server/train_auto_resume.sh configs/llamafactory/generated/execution_sft.yaml
+bash server/train_auto_resume.sh configs/llamafactory/generated/execution_listwise.yaml
+bash server/train_auto_resume.sh configs/llamafactory/generated/execution_dpo.yaml
 ```
+
+`prepare_train_data.sh` first creates deterministic per-user temporal
+train/eval partitions. Proactive histories and Execution references come only
+from the corresponding train partition, and same-track official test episode
+keys are hard-excluded. Formal configs use explicit eval datasets and new
+`*_clean_v2` output directories. `train_auto_resume.sh` verifies protocol and
+dataset hashes before every run, refuses stale resumes, and copies the
+lowest-eval-loss checkpoint to a stable `*_best` directory after training.
 
 For a local smoke run:
 
 ```powershell
+python scripts/14_build_data_protocol.py --config config.yaml
 python scripts/09_run_config_pipeline.py --config config.yaml --limit 3
 python scripts/10_render_training_configs.py --config config.yaml
 python scripts/08_validate_llamafactory_data.py --dataset_dir LLaMA-Factory/data/papo --check_images
 python scripts/11_validate_papo_artifacts.py --work_dir data/papo_config_run
 ```
+
+The standalone `proactive_suggestion.py` and `personalized_execution.py`
+defaults reproduce official test-task construction for evaluation. They are
+not formal training-data entry points; formal training must go through
+`scripts/14_build_data_protocol.py` and `scripts/09_run_config_pipeline.py`.
 
 The config pipeline writes PAPO residual action values, listwise target
 distributions, and pairwise DPO approximations to `data/papo_config_run/`.

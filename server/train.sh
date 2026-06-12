@@ -14,6 +14,22 @@ fi
 export PATH="$ENV_DIR/bin:$PATH"
 cd "$ROOT_DIR"
 
+OUTPUT_DIR="$(
+python - "$CONFIG" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as file:
+    print(yaml.safe_load(file)["output_dir"])
+PY
+)"
+
+if [[ "$(basename "$OUTPUT_DIR")" == *clean_v2* ]] && [[ ! -f "$OUTPUT_DIR/papo_preflight.json" ]]; then
+  echo "ERROR: Strict formal training cannot bypass the preflight gate." >&2
+  echo "Use: bash server/train_auto_resume.sh $CONFIG" >&2
+  exit 1
+fi
+
 if [[ "$NUM_GPUS" -gt 1 ]]; then
   FORCE_TORCHRUN=1 llamafactory-cli train "$CONFIG"
 else

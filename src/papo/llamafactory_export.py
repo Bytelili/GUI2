@@ -30,6 +30,7 @@ def export_proactive_sft(
                     {"role": "assistant", "content": str(target.get("intent") or "")},
                 ],
                 "images": images,
+                "metadata": _export_metadata(task),
             }
         )
     return rows
@@ -57,6 +58,7 @@ def export_execution_sft(
                     {"role": "assistant", "content": str(step.get("raw_action") or step.get("action") or "")},
                 ],
                 "images": images,
+                "metadata": _export_metadata(task, step),
             }
         )
     return rows
@@ -95,6 +97,7 @@ def export_execution_dpo(
                 "papo_weight": float(pair.get("weight", 1.0) or 1.0),
                 "papo_target_probability": float(pair.get("target_preference_probability", 1.0) or 1.0),
                 "metadata": {
+                    **_export_metadata(task, step),
                     "advantage_gap": pair.get("advantage_gap", 0.0),
                     "weight": pair.get("weight", 1.0),
                     "target_preference_probability": pair.get("target_preference_probability", 1.0),
@@ -142,6 +145,7 @@ def export_execution_listwise(
                     "images": images,
                     "papo_listwise_weight": probability,
                     "metadata": {
+                        **_export_metadata(task, step),
                         "tree_id": state.get("tree_id", ""),
                         "node_id": state.get("node_id", ""),
                         "base_policy_probability": candidate.get("base_policy_probability", 0.0),
@@ -171,19 +175,26 @@ def dataset_info() -> dict[str, Any]:
             "system_tag": "system",
         },
     }
-    return {
-        "papo_proactive_sft": {"file_name": "papo_proactive_sft.json", **mllm},
-        "papo_execution_sft": {"file_name": "papo_execution_sft.json", **mllm},
-        "papo_execution_listwise": {
-            "file_name": "papo_execution_listwise.json",
+    result: dict[str, Any] = {}
+    for partition in ["train", "eval"]:
+        result[f"papo_proactive_{partition}_sft"] = {
+            "file_name": f"papo_proactive_{partition}_sft.json",
+            **mllm,
+        }
+        result[f"papo_execution_{partition}_sft"] = {
+            "file_name": f"papo_execution_{partition}_sft.json",
+            **mllm,
+        }
+        result[f"papo_execution_{partition}_listwise"] = {
+            "file_name": f"papo_execution_{partition}_listwise.json",
             **mllm,
             "columns": {
                 **mllm["columns"],
                 "listwise_weight": "papo_listwise_weight",
             },
-        },
-        "papo_execution_dpo": {
-            "file_name": "papo_execution_dpo.json",
+        }
+        result[f"papo_execution_{partition}_dpo"] = {
+            "file_name": f"papo_execution_{partition}_dpo.json",
             "ranking": True,
             "formatting": "sharegpt",
             "columns": {
@@ -194,8 +205,8 @@ def dataset_info() -> dict[str, Any]:
                 "preference_weight": "papo_weight",
                 "preference_target": "papo_target_probability",
             },
-        },
-    }
+        }
+    return result
 
 
 def _proactive_prompt(inputs: dict[str, Any]) -> str:
@@ -281,6 +292,30 @@ def _task_episode_id(task: dict[str, Any]) -> str:
             return task_id[len(prefix):]
     inputs = task.get("input") if isinstance(task.get("input"), dict) else {}
     return f"{inputs.get('user_id', '')}__{inputs.get('time', '')}"
+
+
+def _export_metadata(task: dict[str, Any], step: dict[str, Any] | None = None) -> dict[str, Any]:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    exported = {
+        key: metadata.get(key)
+        for key in [
+            "papo_episode_id",
+            "partition",
+            "protocol_id",
+            "target_split",
+            "history_split",
+            "reference_split",
+            "history_policy",
+            "reference_policy",
+            "history_episode_ids",
+            "same_user_reference_episode_ids",
+            "cross_user_reference_episode_ids",
+        ]
+        if key in metadata
+    }
+    if step is not None:
+        exported["papo_step_id"] = step_id(step)
+    return exported
 
 
 def load_rows(path: str | Path) -> list[dict[str, Any]]:

@@ -24,6 +24,7 @@ def main() -> None:
         "paths.llamafactory_dir",
     ]
     output_dirs = [
+        "paths.protocol_dir",
         "paths.work_dir",
         "paths.task_dir",
         "paths.llamafactory_data_dir",

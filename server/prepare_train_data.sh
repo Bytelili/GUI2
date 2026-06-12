@@ -32,6 +32,7 @@ python "$ROOT_DIR/scripts/12_validate_config_paths.py" \
   --config "$CONFIG_PATH" \
   --create_output_dirs
 python "$ROOT_DIR/scripts/13_smoke_test_papo_objective.py"
+python "$ROOT_DIR/scripts/14_build_data_protocol.py" --config "$CONFIG_PATH"
 python "$ROOT_DIR/scripts/09_run_config_pipeline.py" \
   --config "$CONFIG_PATH"
 python "$ROOT_DIR/scripts/10_render_training_configs.py" --config "$CONFIG_PATH"

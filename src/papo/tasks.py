@@ -31,6 +31,7 @@ def build_proactive_suggestion_tasks(
     history_limit: int = 20,
     limit: int = 0,
     require_complete: bool = True,
+    provenance: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     if screenshot_level not in {0, 1, 2, 3}:
         raise ValueError("screenshot_level must be one of 0, 1, 2, or 3")
@@ -69,6 +70,8 @@ def build_proactive_suggestion_tasks(
                     "screenshot_level": screenshot_level,
                     "history_policy": "same_user_strictly_before_target_time",
                     "target_is_hidden_from_input": True,
+                    "history_episode_ids": [item.episode_id for item in history],
+                    **(provenance or {}),
                 },
             }
         )
@@ -88,6 +91,7 @@ def build_personalized_execution_tasks(
     cross_user_top_k: int = 1,
     intent_similarity_threshold: float = 0.0,
     exclude_same_intent: bool = False,
+    provenance: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     catalog_rows = [episode_ref(row) for row in read_csv_rows(catalog_path)]
     catalog = index_catalog(read_csv_rows(catalog_path))
@@ -165,6 +169,9 @@ def build_personalized_execution_tasks(
                     "same_user_reference_is_personalization_context": True,
                     "cross_user_reference_is_different_age_group_counterfactual": True,
                     "target_actions_are_evaluation_only": True,
+                    "same_user_reference_episode_ids": [ref[0].episode_id for ref in same_refs],
+                    "cross_user_reference_episode_ids": [ref[0].episode_id for ref in cross_refs],
+                    **(provenance or {}),
                 },
             }
         )

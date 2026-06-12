@@ -59,17 +59,22 @@ python scripts/12_validate_config_paths.py --config config.yaml
 Train:
 
 ```bash
-bash server/train.sh configs/llamafactory/generated/proactive_sft.yaml
-bash server/train.sh configs/llamafactory/generated/execution_sft.yaml
-bash server/train.sh configs/llamafactory/generated/execution_listwise.yaml
-bash server/train.sh configs/llamafactory/generated/execution_dpo.yaml
+bash server/train_auto_resume.sh configs/llamafactory/generated/proactive_sft.yaml
+bash server/train_auto_resume.sh configs/llamafactory/generated/execution_sft.yaml
+bash server/train_auto_resume.sh configs/llamafactory/generated/execution_listwise.yaml
+bash server/train_auto_resume.sh configs/llamafactory/generated/execution_dpo.yaml
 ```
 
 For multiple GPUs:
 
 ```bash
-NUM_GPUS=8 bash server/train.sh configs/llamafactory/generated/execution_sft.yaml
+NUM_GPUS=8 bash server/train_auto_resume.sh configs/llamafactory/generated/execution_sft.yaml
 ```
+
+For formal `*_clean_v2` configs, direct `server/train.sh` execution is blocked
+until `server/train_auto_resume.sh` creates a verified preflight gate. The
+launcher also refuses checkpoints whose dataset/config hashes changed and
+finalizes the best evaluated checkpoint without loading it across GPUs.
 
 The uploaded project already contains LLaMA-Factory. `prepare_train_data.sh`
 creates `LLaMA-Factory/data/papo/RawDataset` as a link to the server dataset,

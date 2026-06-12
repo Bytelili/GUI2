@@ -7,6 +7,7 @@ paths:
   raw_root: ${PAPO_RAW_ROOT:-/home/dumike/zyy/GUI/data/raw/fingertip20k}
   archive_root: ${FINGERTIP_ARCHIVE_ROOT:-/home/dumike/zyy/GUI/data/raw/fingertip20k}
   official_root: ${FINGERTIP_OFFICIAL_ROOT:-/home/dumike/zyy/GUI2/data/official/fingertip20k}
+  protocol_dir: ${PAPO_PROTOCOL_DIR:-/home/dumike/zyy/GUI2/data/papo_protocol}
   work_dir: ${PAPO_WORK_DIR:-/home/dumike/zyy/GUI2/data/papo_config_run}
   task_dir: ${PAPO_TASK_DIR:-/home/dumike/zyy/GUI2/data/papo_tasks}
   llamafactory_dir: /home/dumike/zyy/GUI2/LLaMA-Factory
@@ -16,11 +17,13 @@ paths:
   checkpoint_root: ${PAPO_CHECKPOINT_ROOT:-/home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo}
   logging_root: ${PAPO_LOGGING_ROOT:-/home/dumike/zyy/GUI2/runs/papo}
 data:
-  suggestion_split: train_set.csv
-  execution_split: test_execution.csv
-  retrieval_splits:
-  - train_set.csv
-  - test_execution.csv
+  protocol:
+    protocol_id: fingertip20k_strict_temporal_v2
+    source_train_split: train_set.csv
+    proactive_test_split: test_suggestion.csv
+    execution_test_split: test_execution.csv
+    validation_fraction: 0.05
+    min_validation_per_user: 1
   require_complete: true
   suggestion_screenshot_level: 3
   suggestion_history_limit: 20
@@ -67,15 +70,35 @@ training:
   proactive_sft:
     epochs: 3
     learning_rate: 0.0001
+    per_device_train_batch_size: 8
+    per_device_eval_batch_size: 4
+    gradient_accumulation_steps: 2
+    gradient_checkpointing: false
+    eval_steps: 50
   execution_sft:
     epochs: 3
     learning_rate: 0.0001
+    per_device_train_batch_size: 2
+    per_device_eval_batch_size: 2
+    gradient_accumulation_steps: 8
+    gradient_checkpointing: true
+    eval_steps: 25
   execution_listwise:
     epochs: 2
     learning_rate: 1.0e-05
     use_papo_listwise: true
+    per_device_train_batch_size: 2
+    per_device_eval_batch_size: 2
+    gradient_accumulation_steps: 8
+    gradient_checkpointing: true
+    eval_steps: 25
   execution_dpo:
     epochs: 2
     learning_rate: 5.0e-06
     pref_beta: 0.1
     pref_loss: papo
+    per_device_train_batch_size: 1
+    per_device_eval_batch_size: 1
+    gradient_accumulation_steps: 16
+    gradient_checkpointing: true
+    eval_steps: 10
