@@ -41,6 +41,18 @@ bash server/train_auto_resume.sh configs/llamafactory/generated/execution_listwi
 bash server/train_auto_resume.sh configs/llamafactory/generated/execution_dpo.yaml
 ```
 
+To prepare and validate only the Proactive Suggestion track before any
+Execution work:
+
+```bash
+bash server/prepare_proactive_data.sh
+bash server/train_auto_resume.sh configs/llamafactory/generated/proactive_sft.yaml
+```
+
+The preparation command builds only Proactive train/eval exports, validates
+their images and provenance, and runs the strict training preflight. It does
+not build Execution artifacts or start training.
+
 `prepare_train_data.sh` first creates deterministic per-user temporal
 train/eval partitions. Proactive histories and Execution references come only
 from the corresponding train partition, and same-track official test episode

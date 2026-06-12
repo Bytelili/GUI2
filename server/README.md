@@ -50,6 +50,15 @@ Build all task data, PAPO targets, preference pairs, and LLaMA-Factory data:
 bash server/prepare_train_data.sh
 ```
 
+Prepare only the Proactive Suggestion track:
+
+```bash
+bash server/prepare_proactive_data.sh
+```
+
+This command does not build Execution data or start training. It validates the
+strict temporal Proactive train/eval exports and runs the training preflight.
+
 Validate only the configured paths:
 
 ```bash

@@ -219,6 +219,19 @@ class StrictTrainingProtocolTest(unittest.TestCase):
         self.assertTrue(eval_rows)
         self.assertTrue(all(row["metadata"]["partition"] == "train" for row in train_rows))
         self.assertTrue(all(row["metadata"]["partition"] == "eval" for row in eval_rows))
+        subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT_ROOT / "scripts/08_validate_llamafactory_data.py"),
+                "--dataset_dir",
+                str(self.dataset_dir),
+                "--datasets",
+                "papo_proactive_train_sft,papo_proactive_eval_sft",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     def write_dataset(self, name: str, partition: str, episode_ids: list[str]) -> None:
         info_path = self.dataset_dir / "dataset_info.json"

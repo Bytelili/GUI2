@@ -10,11 +10,22 @@ from typing import Any
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate local PAPO LLaMA-Factory datasets.")
     parser.add_argument("--dataset_dir", default="LLaMA-Factory/data/papo")
+    parser.add_argument(
+        "--datasets",
+        default="",
+        help="Optional comma-separated dataset names. By default all datasets in dataset_info.json are validated.",
+    )
     parser.add_argument("--check_images", action="store_true")
     args = parser.parse_args()
 
     root = Path(args.dataset_dir)
     info = json.loads((root / "dataset_info.json").read_text(encoding="utf-8"))
+    selected = [name.strip() for name in args.datasets.split(",") if name.strip()]
+    if selected:
+        missing = [name for name in selected if name not in info]
+        if missing:
+            raise KeyError(f"Datasets are missing from dataset_info.json: {missing}")
+        info = {name: info[name] for name in selected}
     total = 0
     missing_images: list[str] = []
     listwise_sums: dict[str, float] = {}
