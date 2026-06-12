@@ -24,7 +24,7 @@ def main() -> None:
 
     selected, metric, step = select_best_checkpoint(output_dir)
     target = output_dir.with_name(output_dir.name + "_best")
-    _replace_stable_directory(selected, target)
+    _replace_stable_directory(selected, target, output_dir)
     provenance = {
         **gate,
         "status": "passed",
@@ -77,8 +77,19 @@ def select_best_checkpoint(output_dir: Path) -> tuple[Path, float, int]:
     return selected, best_metric, best_step
 
 
-def _replace_stable_directory(source: Path, target: Path) -> None:
-    if target.parent != source.parent or target == source or not target.name.endswith("_best"):
+def _replace_stable_directory(source: Path, target: Path, output_dir: Path) -> None:
+    source = source.resolve()
+    target = target.resolve()
+    output_dir = output_dir.resolve()
+    expected_target = output_dir.with_name(output_dir.name + "_best")
+    source_is_output = source == output_dir
+    source_is_checkpoint = source.parent == output_dir and _checkpoint_step(source) >= 0
+    if (
+        not source.is_dir()
+        or not (source_is_output or source_is_checkpoint)
+        or target != expected_target
+        or target == source
+    ):
         raise ValueError(f"Unsafe stable model target: {target}")
     temporary = target.with_name(target.name + ".tmp")
     if temporary.exists():

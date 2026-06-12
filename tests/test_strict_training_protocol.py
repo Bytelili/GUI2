@@ -159,6 +159,13 @@ class StrictTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(selected.name, "checkpoint-20")
         self.assertEqual(loss, 1.5)
         self.assertEqual(step, 20)
+        target = self.root / "run_best"
+        finalizer._replace_stable_directory(selected, target, output)
+        self.assertEqual((target / "adapter_model.safetensors").read_bytes(), b"adapter")
+        self.assertTrue((target / "trainer_state.json").exists())
+
+        with self.assertRaisesRegex(ValueError, "Unsafe stable model target"):
+            finalizer._replace_stable_directory(selected, self.root / "wrong_best", output)
 
     def test_proactive_pipeline_exports_explicit_train_and_eval(self) -> None:
         self.write_csv(
