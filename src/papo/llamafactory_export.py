@@ -21,7 +21,7 @@ def export_proactive_sft(
         inputs = task.get("input", {})
         target = task.get("target", {})
         images = [_relative_asset(path, raw_root, asset_prefix) for path in inputs.get("initial_screenshots", []) if path]
-        prompt = _image_prefix(len(images)) + _proactive_prompt(inputs)
+        prompt = _image_prefix(len(images)) + proactive_prompt(inputs)
         rows.append(
             {
                 "messages": [
@@ -209,7 +209,7 @@ def dataset_info() -> dict[str, Any]:
     return result
 
 
-def _proactive_prompt(inputs: dict[str, Any]) -> str:
+def proactive_prompt(inputs: dict[str, Any]) -> str:
     history = [
         f"- {item.get('time', '')} | {item.get('scenario', '')} | {item.get('intent', '')}"
         for item in inputs.get("previous_intents", [])

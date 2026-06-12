@@ -240,6 +240,153 @@ class StrictTrainingProtocolTest(unittest.TestCase):
             text=True,
         )
 
+    def test_proactive_evaluation_separates_strict_and_official_history(self) -> None:
+        from papo.data_protocol import build_formal_protocol
+        from papo.proactive_evaluation import prepare_proactive_evaluation_tasks
+
+        tests = [
+            self.row("1", "20250201_120000", "test-one"),
+            self.row("1", "20250202_120000", "test-two"),
+        ]
+        self.write_csv(self.official / "test_suggestion.csv", tests)
+        self.write_csv(self.official / "total.csv", self.rows + tests)
+        self.write_csv(
+            self.official / "user_profile.csv",
+            [{"user_id": "1", "age": "20"}, {"user_id": "2", "age": "30"}],
+        )
+        raw_root = self.root / "raw"
+        for row in self.rows + tests:
+            self.write_raw_episode(raw_root, row)
+        build_formal_protocol(
+            self.official,
+            self.protocol,
+            source_train_split="train_set.csv",
+            proactive_test_split="test_suggestion.csv",
+            execution_test_split="test_execution.csv",
+            validation_fraction=0.25,
+            min_validation_per_user=1,
+            protocol_id="test_protocol",
+        )
+        report = prepare_proactive_evaluation_tasks(
+            official_root=self.official,
+            protocol_dir=self.protocol,
+            raw_root=raw_root,
+            output_dir=self.root / "eval_tasks",
+            screenshot_level=0,
+            history_limit=20,
+            require_complete=True,
+            test_split="test_suggestion.csv",
+        )
+        strict = report["modes"]["strict_holdout"]
+        official = report["modes"]["official_online"]
+        self.assertEqual(strict["history_episodes_from_test_suggestion"], 0)
+        self.assertGreater(official["history_episodes_from_test_suggestion"], 0)
+        self.assertEqual(strict["official_test_targets"], 2)
+        self.assertEqual(strict["excluded_incomplete_targets"], 0)
+        self.assertTrue(Path(strict["task_path"]).name.endswith("level_0.jsonl"))
+
+    def test_prediction_request_and_merge_are_auditable(self) -> None:
+        from papo.proactive_prediction import (
+            build_inference_request,
+            merge_prediction_shards,
+            prepare_prediction_resume,
+            prediction_record,
+            read_jsonl,
+        )
+
+        tasks = [
+            {
+                "task_id": f"suggestion__{index}",
+                "input": {
+                    "user_id": str(index),
+                    "time": f"2025010{index}_120000",
+                    "scenario": "home",
+                    "user_profile": {},
+                    "previous_intents": [],
+                    "initial_screenshots": [],
+                },
+                "target": {"intent": f"SECRET_TARGET_{index}"},
+                "metadata": {
+                    "papo_episode_id": f"{index}__2025010{index}_120000",
+                    "evaluation_history_mode": "strict_holdout",
+                    "screenshot_level": 0,
+                },
+            }
+            for index in [1, 2]
+        ]
+        request = build_inference_request(tasks[0])
+        self.assertNotIn("SECRET_TARGET_1", json.dumps(request))
+        from papo.llamafactory_export import proactive_prompt
+
+        self.assertEqual(request["messages"][0]["content"], proactive_prompt(tasks[0]["input"]))
+        failed_output = self.root / "failed_resume.jsonl"
+        failed_output.write_text(
+            json.dumps(
+                prediction_record(
+                    tasks[0],
+                    predicted_intent="ERROR",
+                    elapsed_seconds=1.0,
+                    prompt_tokens=0,
+                    response_tokens=0,
+                    finish_reason="error",
+                    error="RuntimeError: retry me",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        completed, failed_removed = prepare_prediction_resume([tasks[0]], failed_output)
+        self.assertEqual(completed, set())
+        self.assertEqual(failed_removed, 1)
+        self.assertEqual(read_jsonl(failed_output), [])
+        failed_output.write_text('{"task_id": "suggestion__1"', encoding="utf-8")
+        completed, failed_removed = prepare_prediction_resume([tasks[0]], failed_output)
+        self.assertEqual(completed, set())
+        self.assertEqual(failed_removed, 1)
+        self.assertEqual(read_jsonl(failed_output), [])
+        records = [
+            prediction_record(
+                task,
+                predicted_intent=f"prediction-{index}",
+                elapsed_seconds=1.0,
+                prompt_tokens=10,
+                response_tokens=5,
+                finish_reason="stop",
+            )
+            for index, task in enumerate(tasks, start=1)
+        ]
+        shard_paths = [self.root / "shard_0.jsonl", self.root / "shard_1.jsonl"]
+        for path, row in zip(shard_paths, records):
+            path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+        task_path = self.root / "tasks.jsonl"
+        task_path.write_text("\n".join(json.dumps(task) for task in tasks) + "\n", encoding="utf-8")
+        adapter = self.root / "adapter"
+        adapter.mkdir()
+        (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+        (adapter / "papo_training_provenance.json").write_text(
+            json.dumps({"status": "passed"}),
+            encoding="utf-8",
+        )
+        output = self.root / "predictions.csv"
+        report = merge_prediction_shards(
+            tasks,
+            shard_paths,
+            output,
+            task_path=task_path,
+            adapter_dir=adapter,
+        )
+        self.assertEqual(report["records"], 2)
+        self.assertEqual(report["errors"], 0)
+        self.assertTrue(output.exists())
+        with self.assertRaisesRegex(ValueError, "duplicate task IDs"):
+            merge_prediction_shards(
+                tasks + [tasks[0]],
+                shard_paths,
+                output,
+                task_path=task_path,
+                adapter_dir=adapter,
+            )
+
     def write_dataset(self, name: str, partition: str, episode_ids: list[str]) -> None:
         info_path = self.dataset_dir / "dataset_info.json"
         info = json.loads(info_path.read_text(encoding="utf-8")) if info_path.exists() else {}

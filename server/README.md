@@ -59,6 +59,18 @@ bash server/prepare_proactive_data.sh
 This command does not build Execution data or start training. It validates the
 strict temporal Proactive train/eval exports and runs the training preflight.
 
+Evaluate the finalized best Proactive adapter:
+
+```bash
+bash server/evaluate_proactive_best.sh strict_holdout 3
+bash server/evaluate_proactive_best.sh official_online 3
+```
+
+The first command is the leakage-isolated result. The second reproduces the
+official online-history protocol. Keep their metrics separate. The launcher
+refuses busy GPUs by default, prints periodic GPU and shard progress, and
+retries failed samples when rerun.
+
 Validate only the configured paths:
 
 ```bash

@@ -53,6 +53,22 @@ The preparation command builds only Proactive train/eval exports, validates
 their images and provenance, and runs the strict training preflight. It does
 not build Execution artifacts or start training.
 
+After finalizing `proactive_sft_clean_v2_best`, run the Proactive official-test
+inference and FingerTip similarity evaluation with:
+
+```bash
+bash server/evaluate_proactive_best.sh strict_holdout 3
+bash server/evaluate_proactive_best.sh official_online 3
+```
+
+`strict_holdout` uses only the clean training-history partition.
+`official_online` reproduces the official implementation's `total.csv`
+strict-past history policy, which may include earlier official-test episodes.
+The two protocols are written to separate result directories and must be
+reported separately. Prediction shards are resumable, failed samples are
+retried on the next run, and the official per-sample similarity is rounded to
+two decimal places before aggregation.
+
 `prepare_train_data.sh` first creates deterministic per-user temporal
 train/eval partitions. Proactive histories and Execution references come only
 from the corresponding train partition, and same-track official test episode

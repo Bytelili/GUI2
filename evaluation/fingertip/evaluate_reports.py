@@ -131,9 +131,11 @@ def evaluate_proactive(paths, model, samples, rng, output_dir):
         original_embeddings * prediction_embeddings,
         axis=1,
     )
-    data["official_similarity"] = (
+    data["official_similarity_raw"] = (
         data["edit_similarity"] + data["semantic_similarity"]
     ) / 2.0
+    data["official_similarity"] = data["official_similarity_raw"].round(2)
+    data["similarity"] = data["official_similarity"]
 
     data.to_csv(output_dir / "proactive_predictions_scored.csv", index=False)
 
@@ -149,6 +151,9 @@ def evaluate_proactive(paths, model, samples, rng, output_dir):
             ),
             "official_similarity": numeric_summary(
                 group["official_similarity"], samples, rng
+            ),
+            "official_similarity_raw": numeric_summary(
+                group["official_similarity_raw"], samples, rng
             ),
             "time": numeric_summary(group["time"], samples, rng),
             "token": numeric_summary(group["token"], samples, rng),
@@ -261,7 +266,7 @@ def main():
         "personalized_execution": execution_metrics,
         "notes": {
             "proactive_similarity":
-                "Mean of fuzzy edit similarity and semantic cosine similarity.",
+                "Official per-sample score: mean of fuzzy edit similarity and semantic cosine similarity, rounded to two decimals.",
             "execution_success":
                 "Official script defaults success to zero; annotate or verify it before final reporting.",
             "intent_class_accuracy":
