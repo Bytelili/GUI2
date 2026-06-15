@@ -82,6 +82,16 @@ NUM_SHARDS=4 bash server/evaluate_proactive_best.sh strict_holdout 3
 Smoke mode intentionally skips merging and official evaluation until the full
 task set has been completed.
 
+After completing strict-holdout Levels 0-3, generate an auditable paper table
+without optional Markdown dependencies:
+
+```bash
+python scripts/20_report_proactive_levels.py \
+  --metrics reports/proactive/strict_holdout/all_levels/official_metrics/benchmark_metrics.json \
+  --scored-predictions reports/proactive/strict_holdout/all_levels/official_metrics/proactive_predictions_scored.csv \
+  --output-dir reports/proactive/strict_holdout/all_levels/paper_report
+```
+
 `prepare_train_data.sh` first creates deterministic per-user temporal
 train/eval partitions. Proactive histories and Execution references come only
 from the corresponding train partition, and same-track official test episode

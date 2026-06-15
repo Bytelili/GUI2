@@ -403,6 +403,55 @@ class StrictTrainingProtocolTest(unittest.TestCase):
                 adapter_dir=adapter,
             )
 
+    def test_proactive_level_report_uses_paired_and_user_cluster_bootstrap(self) -> None:
+        report_script = load_script("20_report_proactive_levels.py")
+        metrics = {
+            "proactive_suggestion": {
+                f"level_{level}": {
+                    "count": 2,
+                    "official_similarity": {"mean": 0.5 + level * 0.1, "ci95_low": 0.4, "ci95_high": 0.6},
+                    "edit_similarity": {"mean": 0.5},
+                    "semantic_similarity": {"mean": 0.5},
+                    "time": {"mean": 1.0 + level},
+                    "token": {"mean": 100.0 + level * 100},
+                    "error_rate": 0.0,
+                }
+                for level in range(4)
+            }
+        }
+        metrics_path = self.root / "metrics.json"
+        metrics_path.write_text(json.dumps(metrics), encoding="utf-8")
+        scored_path = self.root / "scored.csv"
+        rows = [
+            {
+                "task_id": f"task-{task}",
+                "user_id": str(task),
+                "level": level,
+                "official_similarity": 0.2 * task + 0.1 * level,
+                "time": 1.0 + level,
+                "token": 100 + level * 100,
+                "error": "",
+            }
+            for level in range(4)
+            for task in [1, 2]
+        ]
+        with scored_path.open("w", encoding="utf-8-sig", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+        report = report_script.build_report(
+            metrics_path,
+            scored_path,
+            self.root / "report",
+            bootstrap_samples=200,
+            seed=42,
+        )
+        comparison = report["paired_comparisons"][0]
+        self.assertAlmostEqual(comparison["mean_similarity_delta"], 0.1)
+        self.assertEqual(comparison["paired_tasks"], 2)
+        self.assertEqual(comparison["user_clusters"], 2)
+        self.assertTrue((self.root / "report" / "proactive_level_report.md").exists())
+
     def write_dataset(self, name: str, partition: str, episode_ids: list[str]) -> None:
         info_path = self.dataset_dir / "dataset_info.json"
         info = json.loads(info_path.read_text(encoding="utf-8")) if info_path.exists() else {}
