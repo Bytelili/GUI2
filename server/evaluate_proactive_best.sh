@@ -6,6 +6,7 @@ MODE="${1:-strict_holdout}"
 LEVEL="${2:-3}"
 NUM_SHARDS="${NUM_SHARDS:-4}"
 MONITOR_INTERVAL="${MONITOR_INTERVAL:-60}"
+LIMIT="${LIMIT:-0}"
 ADAPTER="$ROOT_DIR/LLaMA-Factory/saves/papo/proactive_sft_clean_v2_best"
 TASKS="$ROOT_DIR/data/papo_tasks/proactive_test_${MODE}_level_${LEVEL}.jsonl"
 RUN_DIR="$ROOT_DIR/reports/proactive/${MODE}/level_${LEVEL}"
@@ -22,6 +23,10 @@ if [[ "$LEVEL" != "0" && "$LEVEL" != "1" && "$LEVEL" != "2" && "$LEVEL" != "3" ]
 fi
 if [[ "$NUM_SHARDS" -lt 1 || "$NUM_SHARDS" -gt 4 ]]; then
   echo "ERROR: NUM_SHARDS must be between 1 and 4." >&2
+  exit 1
+fi
+if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: LIMIT must be a non-negative integer." >&2
   exit 1
 fi
 
@@ -64,6 +69,11 @@ echo "===== 4. Run resumable prediction shards ====="
 pids=()
 shards=()
 logs=()
+limit_args=()
+if [[ "$LIMIT" -gt 0 ]]; then
+  limit_args=(--limit "$LIMIT")
+  echo "Smoke mode: each shard will run at most $LIMIT assigned tasks."
+fi
 stop_children() {
   echo "Interrupted; stopping prediction shards..." >&2
   for pid in "${pids[@]}"; do
@@ -87,6 +97,7 @@ for shard in $(seq 0 $((NUM_SHARDS - 1))); do
     --output "$shard_path" \
     --shard-index "$shard" \
     --num-shards "$NUM_SHARDS" \
+    "${limit_args[@]}" \
     > "$log_path" 2>&1 &
   pids+=("$!")
 done
@@ -125,6 +136,16 @@ if [[ "$status" -ne 0 ]]; then
   exit "$status"
 fi
 trap - INT TERM
+
+if [[ "$LIMIT" -gt 0 ]]; then
+  echo "===== Smoke prediction completed; merge and official evaluation intentionally skipped ====="
+  for log_path in "${logs[@]}"; do
+    echo "===== $log_path ====="
+    tail -n 20 "$log_path" 2>/dev/null || true
+  done
+  echo "Rerun with LIMIT=0 to resume and complete the full evaluation."
+  exit 0
+fi
 
 echo "===== 5. Merge and validate complete predictions ====="
 python scripts/19_merge_proactive_predictions.py \

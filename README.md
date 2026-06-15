@@ -69,6 +69,16 @@ reported separately. Prediction shards are resumable, failed samples are
 retried on the next run, and the official per-sample similarity is rounded to
 two decimal places before aggregation.
 
+Before a full run, use the same resumable output identity for a small smoke:
+
+```bash
+LIMIT=5 NUM_SHARDS=4 bash server/evaluate_proactive_best.sh strict_holdout 3
+NUM_SHARDS=4 bash server/evaluate_proactive_best.sh strict_holdout 3
+```
+
+Smoke mode intentionally skips merging and official evaluation until the full
+task set has been completed.
+
 `prepare_train_data.sh` first creates deterministic per-user temporal
 train/eval partitions. Proactive histories and Execution references come only
 from the corresponding train partition, and same-track official test episode
