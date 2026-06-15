@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "experiment_id": "execution_strict_v1",
+  "protocol_id": "fingertip20k_strict_temporal_v2",
+  "tasks_path": "/home/dumike/zyy/GUI2/data/papo_tasks/execution_official_test_strict.jsonl",
+  "output_root": "/home/dumike/zyy/GUI2/reports/execution_pipeline/strict_v1",
+  "official_reference_audit_path": "/home/dumike/zyy/GUI2/reports/execution_pipeline/official_reference_audit.json",
+  "seed": 42,
+  "max_steps": 30,
+  "max_invalid_actions": 3,
+  "invalid_action_policy": "official_wait",
+  "inference": {
+    "backend": "llamafactory",
+    "base_model": "/home/dumike/zyy/GUI/backbone/Qwen2.5-VL-3B-Instruct",
+    "template": "qwen2_vl",
+    "max_new_tokens": 128,
+    "infer_dtype": "bfloat16",
+    "prompt_style": "training_aligned"
+  },
+  "device": {
+    "backend": "adb",
+    "adb_path": "adb",
+    "serial": "",
+    "observe_delay_seconds": 1.0,
+    "action_delay_seconds": 1.0,
+    "wait_delay_seconds": 2.0,
+    "long_click_duration_ms": 500,
+    "scroll_distance_px": 500,
+    "scroll_duration_ms": 300,
+    "hierarchy_backend": "uiautomator2",
+    "text_input_mode": "uiautomator2",
+    "require_app_hook": true,
+    "app_hooks": {
+      "example.app": {
+        "before_task": [
+          ["shell", "am", "force-stop", "example.app"],
+          ["shell", "monkey", "-p", "example.app", "-c", "android.intent.category.LAUNCHER", "1"]
+        ],
+        "after_task": []
+      }
+    }
+  },
+  "success_rules_path": "/home/dumike/zyy/GUI2/execution_pipeline_candidate/success_rules.example.json",
+  "models": [
+    {
+      "id": "base",
+      "adapter": ""
+    },
+    {
+      "id": "execution_sft_best",
+      "adapter": "/home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo/execution_sft_clean_v2_best"
+    },
+    {
+      "id": "execution_listwise_best",
+      "adapter": "/home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo/execution_listwise_clean_v2_best"
+    },
+    {
+      "id": "execution_dpo_best",
+      "adapter": "/home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo/execution_dpo_clean_v2_best"
+    }
+  ],
+  "runs": [
+    {
+      "id": "base__correct_full_history",
+      "model": "base",
+      "condition": "correct_full_history",
+      "required": true
+    },
+    {
+      "id": "sft__correct_full_history",
+      "model": "execution_sft_best",
+      "condition": "correct_full_history",
+      "required": true
+    },
+    {
+      "id": "listwise__correct_full_history",
+      "model": "execution_listwise_best",
+      "condition": "correct_full_history",
+      "required": true
+    },
+    {
+      "id": "dpo__correct_full_history",
+      "model": "execution_dpo_best",
+      "condition": "correct_full_history",
+      "required": true
+    },
+    {
+      "id": "dpo__ablation_full_history",
+      "model": "execution_dpo_best",
+      "condition": "correct_full_history",
+      "required": true
+    },
+    {
+      "id": "dpo__correct_recent_history",
+      "model": "execution_dpo_best",
+      "condition": "correct_recent_history",
+      "required": true
+    },
+    {
+      "id": "dpo__no_history",
+      "model": "execution_dpo_best",
+      "condition": "no_history",
+      "required": true
+    },
+    {
+      "id": "dpo__cross_user_history",
+      "model": "execution_dpo_best",
+      "condition": "cross_user_history",
+      "required": true
+    },
+    {
+      "id": "dpo__shuffled_user_history",
+      "model": "execution_dpo_best",
+      "condition": "shuffled_user_history",
+      "required": true
+    },
+    {
+      "id": "dpo__stale_history",
+      "model": "execution_dpo_best",
+      "condition": "stale_history",
+      "required": true
+    },
+    {
+      "id": "dpo__truncated_history",
+      "model": "execution_dpo_best",
+      "condition": "truncated_history",
+      "required": true
+    }
+  ],
+  "comparisons": [
+    {
+      "id": "sft_vs_base",
+      "reference_run": "base__correct_full_history",
+      "candidate_run": "sft__correct_full_history"
+    },
+    {
+      "id": "listwise_vs_base",
+      "reference_run": "base__correct_full_history",
+      "candidate_run": "listwise__correct_full_history"
+    },
+    {
+      "id": "listwise_vs_sft",
+      "reference_run": "sft__correct_full_history",
+      "candidate_run": "listwise__correct_full_history"
+    },
+    {
+      "id": "dpo_vs_base",
+      "reference_run": "base__correct_full_history",
+      "candidate_run": "dpo__correct_full_history"
+    },
+    {
+      "id": "dpo_vs_listwise",
+      "reference_run": "listwise__correct_full_history",
+      "candidate_run": "dpo__correct_full_history"
+    },
+    {
+      "id": "dpo_vs_sft",
+      "reference_run": "sft__correct_full_history",
+      "candidate_run": "dpo__correct_full_history"
+    },
+    {
+      "id": "full_vs_recent_history",
+      "reference_run": "dpo__correct_recent_history",
+      "candidate_run": "dpo__ablation_full_history"
+    },
+    {
+      "id": "full_vs_no_history",
+      "reference_run": "dpo__no_history",
+      "candidate_run": "dpo__ablation_full_history"
+    },
+    {
+      "id": "full_vs_cross_user",
+      "reference_run": "dpo__cross_user_history",
+      "candidate_run": "dpo__ablation_full_history"
+    },
+    {
+      "id": "full_vs_shuffled_user",
+      "reference_run": "dpo__shuffled_user_history",
+      "candidate_run": "dpo__ablation_full_history"
+    },
+    {
+      "id": "full_vs_stale_history",
+      "reference_run": "dpo__stale_history",
+      "candidate_run": "dpo__ablation_full_history"
+    },
+    {
+      "id": "full_vs_truncated_history",
+      "reference_run": "dpo__truncated_history",
+      "candidate_run": "dpo__ablation_full_history"
+    }
+  ]
+}

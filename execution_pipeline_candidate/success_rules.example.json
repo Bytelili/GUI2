@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "rules": {
+    "execution__USER__TIME": {
+      "source": "human-authored final-state rule",
+      "xml_contains_all": [
+        "expected final-state text"
+      ],
+      "xml_contains_any": [],
+      "xml_not_contains": [
+        "error"
+      ]
+    }
+  }
+}
