@@ -285,6 +285,22 @@ class StrictTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(strict["excluded_incomplete_targets"], 0)
         self.assertTrue(Path(strict["task_path"]).name.endswith("level_0.jsonl"))
 
+    def test_proactive_evaluation_deduplicates_only_exact_official_targets(self) -> None:
+        from papo.proactive_evaluation import canonicalize_test_targets
+
+        first = self.row("1", "20250201_120000", "test-one")
+        second = self.row("2", "20250202_120000", "test-two")
+        rows, audit = canonicalize_test_targets([first, second, dict(first)])
+        self.assertEqual(rows, [first, second])
+        self.assertEqual(audit["source_target_rows"], 3)
+        self.assertEqual(audit["unique_target_rows"], 2)
+        self.assertEqual(audit["exact_duplicate_rows_removed"], 1)
+
+        conflicting = dict(first)
+        conflicting["intentDescription"] = "different-intent"
+        with self.assertRaisesRegex(ValueError, "conflicting rows"):
+            canonicalize_test_targets([first, conflicting])
+
     def test_prediction_request_and_merge_are_auditable(self) -> None:
         from papo.proactive_prediction import (
             build_inference_request,

@@ -32,6 +32,7 @@ def build_proactive_suggestion_tasks(
     limit: int = 0,
     require_complete: bool = True,
     provenance: dict[str, Any] | None = None,
+    target_rows: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     if screenshot_level not in {0, 1, 2, 3}:
         raise ValueError("screenshot_level must be one of 0, 1, 2, or 3")
@@ -40,7 +41,7 @@ def build_proactive_suggestion_tasks(
     profiles = load_profiles(profiles_path)
     raw_index = complete_raw_index(raw_root)
     tasks: list[dict[str, Any]] = []
-    test_rows = read_csv_rows(test_path)
+    test_rows = target_rows if target_rows is not None else read_csv_rows(test_path)
     for row in test_rows:
         target = episode_ref(row)
         if require_complete and (target.user_id, target.time) not in raw_index:

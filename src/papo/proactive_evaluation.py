@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .data_protocol import episode_keys, sha256_file
+from .data_protocol import episode_key, episode_keys, sha256_file
 from .io import write_jsonl
 from .official_data import read_csv_rows
 from .tasks import build_proactive_suggestion_tasks
@@ -34,15 +34,18 @@ def prepare_proactive_evaluation_tasks(
         "strict_holdout": strict_history_path,
         "official_online": official_history_path,
     }
+    source_test_rows = read_csv_rows(test_path)
+    canonical_test_rows, duplicate_audit = canonicalize_test_targets(source_test_rows)
     report: dict[str, Any] = {
         "status": "passed",
         "test_split": test_split,
         "test_split_sha256": sha256_file(test_path),
+        **duplicate_audit,
         "screenshot_level": screenshot_level,
         "history_limit": history_limit,
         "modes": {},
     }
-    test_ids = _episode_ids(read_csv_rows(test_path))
+    test_ids = _episode_ids(canonical_test_rows)
     strict_ids = _episode_ids(read_csv_rows(strict_history_path))
 
     for mode, history_path in modes.items():
@@ -54,10 +57,12 @@ def prepare_proactive_evaluation_tasks(
             screenshot_level=screenshot_level,
             history_limit=history_limit,
             require_complete=require_complete,
+            target_rows=canonical_test_rows,
             provenance={
                 "partition": "official_test",
                 "evaluation_history_mode": mode,
                 "target_split": test_split,
+                "exact_duplicate_target_rows_removed": duplicate_audit["exact_duplicate_rows_removed"],
                 "history_split": history_path.name,
             },
         )
@@ -137,3 +142,32 @@ def validate_proactive_evaluation_tasks(
 
 def _episode_ids(rows: list[dict[str, Any]]) -> set[str]:
     return {f"{user_id}__{time}" for user_id, time in episode_keys(rows)}
+
+
+def canonicalize_test_targets(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], dict[str, int]]:
+    canonical: list[dict[str, str]] = []
+    by_key: dict[tuple[str, str], dict[str, str]] = {}
+    exact_duplicates = 0
+    conflicting_keys: list[tuple[str, str]] = []
+    for row in rows:
+        key = episode_key(row)
+        previous = by_key.get(key)
+        if previous is None:
+            by_key[key] = row
+            canonical.append(row)
+        elif previous == row:
+            exact_duplicates += 1
+        else:
+            conflicting_keys.append(key)
+    if conflicting_keys:
+        examples = [f"{user_id}__{time}" for user_id, time in conflicting_keys[:10]]
+        raise ValueError(
+            "Official Proactive test split contains conflicting rows for the same episode key: "
+            f"count={len(conflicting_keys)}, examples={examples}"
+        )
+    return canonical, {
+        "source_target_rows": len(rows),
+        "unique_target_rows": len(canonical),
+        "exact_duplicate_rows_removed": exact_duplicates,
+        "conflicting_duplicate_keys": 0,
+    }

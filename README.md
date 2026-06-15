@@ -68,6 +68,9 @@ The two protocols are written to separate result directories and must be
 reported separately. Prediction shards are resumable, failed samples are
 retried on the next run, and the official per-sample similarity is rounded to
 two decimal places before aggregation.
+The task audit deterministically removes only byte-equivalent duplicate target
+rows from the official suggestion split and reports both the raw-row and
+unique-episode counts. Conflicting rows for the same episode key are rejected.
 
 Before a full run, use the same resumable output identity for a small smoke:
 
