@@ -12,8 +12,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "LLaMA-Factory" / "src"))
 
-from papo.config import config_path, load_config  # noqa: E402
+from papo.config import load_config  # noqa: E402
 from papo.data_protocol import sha256_file  # noqa: E402
+from papo.proactive_adapter import validate_proactive_adapter  # noqa: E402
 from papo.proactive_prediction import (  # noqa: E402
     append_jsonl,
     build_inference_request,
@@ -153,35 +154,7 @@ def main() -> None:
 
 
 def _validate_adapter(adapter_dir: Path, config: dict) -> None:
-    provenance_path = adapter_dir / "papo_training_provenance.json"
-    adapter_path = adapter_dir / "adapter_model.safetensors"
-    if not provenance_path.exists() or not adapter_path.exists():
-        raise FileNotFoundError(f"Finalized adapter is incomplete: {adapter_dir}")
-    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
-    if provenance.get("status") != "passed":
-        raise ValueError(f"Finalized adapter provenance is not passed: {provenance_path}")
-    if "papo_proactive_train_sft" not in set(provenance.get("datasets") or []):
-        raise ValueError(f"Finalized adapter is not a clean Proactive adapter: {provenance_path}")
-    if "papo_proactive_eval_sft" not in set(provenance.get("eval_datasets") or []):
-        raise ValueError(f"Finalized adapter has no clean Proactive eval provenance: {provenance_path}")
-    expected_protocol = str(config["data"]["protocol"]["protocol_id"])
-    if provenance.get("protocol_id") != expected_protocol:
-        raise ValueError(
-            f"Finalized adapter protocol mismatch: expected={expected_protocol}, actual={provenance.get('protocol_id')}"
-        )
-
-    manifest_path = config_path(config, "paths.protocol_dir") / "protocol_manifest.json"
-    if sha256_file(manifest_path) != provenance.get("protocol_manifest_sha256"):
-        raise ValueError(f"Finalized adapter protocol manifest changed after training: {manifest_path}")
-
-    dataset_dir = config_path(config, "paths.llamafactory_data_dir")
-    dataset_info = json.loads((dataset_dir / "dataset_info.json").read_text(encoding="utf-8"))
-    for name, expected_hash in dict(provenance.get("dataset_hashes") or {}).items():
-        if name not in dataset_info:
-            raise KeyError(f"Finalized adapter dataset is missing from dataset_info.json: {name}")
-        dataset_path = dataset_dir / dataset_info[name]["file_name"]
-        if sha256_file(dataset_path) != expected_hash:
-            raise ValueError(f"Finalized adapter dataset changed after training: {name}")
+    validate_proactive_adapter(adapter_dir, config)
 
 
 def _validate_resume_identity(
