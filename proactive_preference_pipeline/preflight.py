@@ -29,6 +29,9 @@ def validate_preference_training(manifest_path: Path, training_path: Path) -> di
         raise ValueError("Preference manifest status is not passed")
     if manifest.get("method") != "proactive_personalized_preference_v1":
         raise ValueError(f"Unexpected preference method: {manifest.get('method')}")
+    quality = manifest.get("candidate_quality") if isinstance(manifest.get("candidate_quality"), dict) else {}
+    if quality.get("status") not in {"passed", "warning"} or quality.get("hard_failures"):
+        raise ValueError("Candidate quality hard gate is not clean")
     for partition in ["train", "eval"]:
         report = manifest.get("partitions", {}).get(partition, {})
         if report.get("outside_train_reference_episodes") != 0 or report.get("temporal_violations") != 0:

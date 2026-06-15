@@ -15,6 +15,7 @@ from ppipeline.audit import audit_preference_sets  # noqa: E402
 from ppipeline.candidates import build_candidate_sets, model_candidate_map  # noqa: E402
 from ppipeline.export import export_preference_datasets, preference_dataset_info  # noqa: E402
 from ppipeline.io_utils import read_jsonl, sha256_file, write_json, write_jsonl  # noqa: E402
+from ppipeline.quality import QualityThresholds, audit_candidate_quality, build_quality_review_sample  # noqa: E402
 from ppipeline.rewards import RewardWeights, score_candidate_sets  # noqa: E402
 
 
@@ -39,6 +40,12 @@ def main() -> None:
     parser.add_argument("--user-weight", type=float, default=0.20)
     parser.add_argument("--context-weight", type=float, default=0.15)
     parser.add_argument("--specificity-weight", type=float, default=0.10)
+    parser.add_argument("--pseudo-negative-threshold", type=float, default=0.92)
+    parser.add_argument("--easy-negative-task-threshold", type=float, default=0.20)
+    parser.add_argument("--easy-negative-user-threshold", type=float, default=0.20)
+    parser.add_argument("--near-duplicate-threshold", type=float, default=0.92)
+    parser.add_argument("--max-invalid-negative-rate", type=float, default=0.01)
+    parser.add_argument("--max-tasks-without-usable-negative-rate", type=float, default=0.05)
     parser.add_argument("--limit", type=int, default=0)
     args = parser.parse_args()
 
@@ -89,6 +96,33 @@ def main() -> None:
     }
     train_scored = score_candidate_sets(train_sets, **score_args)
     eval_scored = score_candidate_sets(eval_sets, **score_args)
+    quality_thresholds = QualityThresholds(
+        pseudo_negative_task_match=args.pseudo_negative_threshold,
+        easy_negative_task_match=args.easy_negative_task_threshold,
+        easy_negative_same_user_similarity=args.easy_negative_user_threshold,
+        near_duplicate_similarity=args.near_duplicate_threshold,
+        max_invalid_negative_rate=args.max_invalid_negative_rate,
+        max_tasks_without_usable_negative_rate=args.max_tasks_without_usable_negative_rate,
+    )
+    quality_audit, quality_flags = audit_candidate_quality(
+        train_scored,
+        eval_scored,
+        thresholds=quality_thresholds,
+        model_candidates_expected={
+            "train": bool(train_model),
+            "eval": bool(eval_model),
+        },
+    )
+    work_dir.mkdir(parents=True, exist_ok=True)
+    write_json(work_dir / "candidate_quality_report.json", quality_audit)
+    write_jsonl(work_dir / "candidate_quality_flags.jsonl", quality_flags)
+    write_jsonl(
+        work_dir / "candidate_quality_review_sample.jsonl",
+        build_quality_review_sample(train_scored, eval_scored),
+    )
+    if quality_audit["status"] == "failed":
+        print(json.dumps(quality_audit, ensure_ascii=False, indent=2))
+        raise ValueError("Candidate quality hard gate failed; inspect candidate_quality_report.json")
     train_reference_ids = _read_protocol_episode_ids(protocol_history_path)
     audit = audit_preference_sets(
         train_scored,
@@ -96,7 +130,6 @@ def main() -> None:
         train_reference_ids=train_reference_ids,
     )
 
-    work_dir.mkdir(parents=True, exist_ok=True)
     dataset_dir.mkdir(parents=True, exist_ok=True)
     write_jsonl(work_dir / "proactive_train_candidates_scored.jsonl", train_scored)
     write_jsonl(work_dir / "proactive_eval_candidates_scored.jsonl", eval_scored)
@@ -123,6 +156,7 @@ def main() -> None:
     manifest = {
         **audit,
         "method": "proactive_personalized_preference_v1",
+        "candidate_quality": quality_audit,
         "limitations": {
             "abstention_training": "not_enabled_without_reliable negative-trigger labels",
             "reward_model": "deterministic decomposed proxy; report each component and ablate weights",

@@ -101,6 +101,23 @@ case "$MODE" in
       configs/llamafactory/generated/proactive_preference_dpo.yaml
     ;;
   audit)
+    echo "===== Candidate quality report ====="
+    cat data/proactive_preference/candidate_quality_report.json 2>/dev/null || true
+    echo "===== Candidate quality flags ====="
+    python - <<'PY'
+from collections import Counter
+import json
+from pathlib import Path
+
+path = Path("data/proactive_preference/candidate_quality_flags.jsonl")
+rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.exists() else []
+print("Flagged candidates:", len(rows))
+print("Quality classes:", dict(Counter(str(row.get("quality_class") or "") for row in rows)))
+print("Candidate sources:", dict(Counter(str(row.get("candidate_source") or "") for row in rows)))
+review = Path("data/proactive_preference/candidate_quality_review_sample.jsonl")
+review_rows = [json.loads(line) for line in review.read_text(encoding="utf-8").splitlines() if line.strip()] if review.exists() else []
+print("Balanced human-review samples:", len(review_rows))
+PY
     echo "===== Preference manifest ====="
     cat data/proactive_preference/preference_manifest.json 2>/dev/null || true
     echo "===== Generated configs ====="

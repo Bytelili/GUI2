@@ -27,10 +27,20 @@ def export_preference_datasets(
             if str(path)
         ]
         metadata = _base_metadata(row)
-        for candidate in row["candidates"]:
-            probability = float(candidate.get("target_policy_probability", 0.0) or 0.0)
-            if probability <= 0.0:
-                continue
+        eligible_candidates = [
+            candidate
+            for candidate in row["candidates"]
+            if _listwise_eligible(candidate)
+            and float(candidate.get("target_policy_probability", 0.0) or 0.0) > 0.0
+        ]
+        probability_total = sum(
+            float(candidate.get("target_policy_probability", 0.0) or 0.0)
+            for candidate in eligible_candidates
+        )
+        for candidate in eligible_candidates:
+            quality = candidate.get("quality") if isinstance(candidate.get("quality"), dict) else {}
+            original_probability = float(candidate.get("target_policy_probability", 0.0) or 0.0)
+            probability = original_probability / probability_total
             listwise.append(
                 {
                     "messages": [
@@ -46,7 +56,9 @@ def export_preference_datasets(
                         "candidate_source": candidate.get("source", ""),
                         "candidate_source_episode_id": candidate.get("source_episode_id", ""),
                         "reward": candidate.get("reward", {}),
+                        "quality": quality,
                         "target_policy_probability": probability,
+                        "original_target_policy_probability": original_probability,
                     },
                 }
             )
@@ -73,6 +85,11 @@ def export_preference_datasets(
                 }
             )
     return listwise, dpo
+
+
+def _listwise_eligible(candidate: dict[str, Any]) -> bool:
+    quality = candidate.get("quality") if isinstance(candidate.get("quality"), dict) else {}
+    return not quality or bool(quality.get("listwise_eligible"))
 
 
 def preference_dataset_info() -> dict[str, Any]:

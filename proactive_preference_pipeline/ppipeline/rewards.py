@@ -81,13 +81,14 @@ def score_candidate_sets(
         for candidate, probability in zip(candidates, probabilities):
             candidate["target_policy_probability"] = probability
         candidates.sort(key=lambda item: (item["reward"]["total"], item["source"] == "oracle_target"), reverse=True)
-        pairs = _build_pairs(candidates, pair_margin, max_pairs_per_task, temperature)
+        pairs = build_pairs(candidates, pair_margin, max_pairs_per_task, temperature)
         scored_sets.append(
             {
                 **row,
                 "reward_weights": asdict(weights),
                 "temperature": temperature,
                 "pair_margin": pair_margin,
+                "max_pairs_per_task": max_pairs_per_task,
                 "candidates": candidates,
                 "pairs": pairs,
             }
@@ -103,7 +104,7 @@ def text_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, left_key, right_key).ratio()
 
 
-def _build_pairs(
+def build_pairs(
     candidates: list[dict[str, Any]],
     margin: float,
     limit: int,

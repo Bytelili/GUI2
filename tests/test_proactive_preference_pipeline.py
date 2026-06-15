@@ -20,6 +20,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from ppipeline.audit import audit_preference_sets  # noqa: E402
 from ppipeline.candidates import build_candidate_sets  # noqa: E402
 from ppipeline.export import export_preference_datasets, preference_dataset_info, proactive_prompt  # noqa: E402
+from ppipeline.quality import QualityThresholds, audit_candidate_quality, build_quality_review_sample  # noqa: E402
 from ppipeline.rewards import RewardWeights, score_candidate_sets  # noqa: E402
 from papo.data_protocol import sha256_file  # noqa: E402
 
@@ -115,6 +116,55 @@ class ProactivePreferencePipelineTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sum to one"):
             RewardWeights(task=1.0, user=1.0, context=0.0, specificity=0.0).validate()
 
+    def test_quality_gate_classifies_candidates_and_removes_unsafe_dpo_pairs(self) -> None:
+        train = [self.quality_row("train", "train-quality")]
+        evaluation = [self.quality_row("eval", "eval-quality")]
+        report, flags = audit_candidate_quality(train, evaluation)
+        self.assertEqual(report["status"], "failed")
+        self.assertTrue(report["hard_failures"])
+        self.assertEqual(
+            report["partitions"]["train"]["classification_counts"],
+            {
+                "easy_negative": 1,
+                "invalid": 1,
+                "pseudo_negative": 1,
+                "valid_hard_negative": 1,
+            },
+        )
+        self.assertEqual(len(train[0]["pairs"]), 2)
+        self.assertEqual(
+            {pair["rejected_candidate_id"] for pair in train[0]["pairs"]},
+            {"easy", "hard"},
+        )
+        self.assertEqual(
+            {item["quality_class"] for item in flags},
+            {"invalid", "pseudo_negative", "easy_negative"},
+        )
+        review = build_quality_review_sample(train, evaluation, per_bucket=1)
+        self.assertEqual(
+            {item["quality"]["class"] for item in review},
+            {"invalid", "pseudo_negative", "easy_negative", "valid_hard_negative"},
+        )
+        self.assertTrue(all(item["target"] for item in review))
+        listwise, dpo = export_preference_datasets(train, raw_root="/raw", asset_prefix="RawDataset")
+        self.assertNotIn("x", {row["messages"][-1]["content"] for row in listwise})
+        self.assertAlmostEqual(sum(row["papo_listwise_weight"] for row in listwise), 1.0)
+        self.assertEqual({row["metadata"]["rejected_candidate_id"] for row in dpo}, {"easy", "hard"})
+
+    def test_quality_gate_can_make_proxy_warnings_without_hard_failure(self) -> None:
+        train = self.quality_row("train", "train-warning")
+        evaluation = self.quality_row("eval", "eval-warning")
+        for row in [train, evaluation]:
+            row["candidates"] = [
+                candidate for candidate in row["candidates"] if candidate["candidate_id"] != "invalid"
+            ]
+            row["pairs"] = [
+                pair for pair in row["pairs"] if pair["rejected_candidate_id"] != "invalid"
+            ]
+        report, _ = audit_candidate_quality([train], [evaluation], thresholds=QualityThresholds())
+        self.assertEqual(report["status"], "warning")
+        self.assertFalse(report["hard_failures"])
+
     def test_candidate_generation_resume_retries_empty_and_truncated_rows(self) -> None:
         spec = importlib.util.spec_from_file_location(
             "generate_model_candidates",
@@ -180,6 +230,10 @@ class ProactivePreferencePipelineTest(unittest.TestCase):
             manifest = json.loads((work_dir / "preference_manifest.json").read_text(encoding="utf-8"))
             info = json.loads((dataset_dir / "dataset_info.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["status"], "passed")
+            self.assertIn(manifest["candidate_quality"]["status"], {"passed", "warning"})
+            self.assertTrue((work_dir / "candidate_quality_report.json").exists())
+            self.assertTrue((work_dir / "candidate_quality_flags.jsonl").exists())
+            self.assertTrue((work_dir / "candidate_quality_review_sample.jsonl").exists())
             self.assertEqual(len(manifest["datasets"]), 4)
             self.assertIn("papo_proactive_train_listwise", info)
             self.assertTrue(json.loads((dataset_dir / "papo_proactive_eval_dpo.json").read_text(encoding="utf-8")))
@@ -202,6 +256,16 @@ class ProactivePreferencePipelineTest(unittest.TestCase):
                 training_path,
             )
             self.assertEqual(report["status"], "passed")
+            bad_manifest = dict(manifest)
+            bad_manifest["candidate_quality"] = {
+                **manifest["candidate_quality"],
+                "status": "failed",
+                "hard_failures": ["test failure"],
+            }
+            bad_manifest_path = work_dir / "preference_manifest_failed_quality.json"
+            bad_manifest_path.write_text(json.dumps(bad_manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "quality hard gate"):
+                preflight.validate_preference_training(bad_manifest_path, training_path)
             dataset = dataset_dir / "papo_proactive_train_listwise.json"
             dataset.write_text("[]", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "changed after audited build"):
@@ -348,6 +412,68 @@ class ProactivePreferencePipelineTest(unittest.TestCase):
             score_candidate_sets(train_raw, weights=weights),
             score_candidate_sets(eval_raw, weights=weights),
         )
+
+    @staticmethod
+    def quality_row(partition: str, task_id: str) -> dict:
+        candidates = [
+            {
+                "candidate_id": "oracle",
+                "source": "oracle_target",
+                "text": "open weather and show today's temperature",
+                "reward": {"task_match": 1.0, "same_user_similarity": 0.8, "total": 1.0},
+                "target_policy_probability": 0.2,
+            },
+            {
+                "candidate_id": "pseudo",
+                "source": "sft_sample",
+                "text": "open weather and show today temperature",
+                "reward": {"task_match": 0.95, "same_user_similarity": 0.8, "total": 0.9},
+                "target_policy_probability": 0.2,
+            },
+            {
+                "candidate_id": "easy",
+                "source": "cross_user_hard",
+                "text": "book a restaurant",
+                "reward": {"task_match": 0.1, "same_user_similarity": 0.1, "total": 0.2},
+                "target_policy_probability": 0.2,
+            },
+            {
+                "candidate_id": "hard",
+                "source": "same_user_history",
+                "text": "open weather and show tomorrow's temperature",
+                "reward": {"task_match": 0.7, "same_user_similarity": 0.8, "total": 0.7},
+                "target_policy_probability": 0.2,
+            },
+            {
+                "candidate_id": "invalid",
+                "source": "sft_sample",
+                "text": "x",
+                "reward": {"task_match": 0.0, "same_user_similarity": 0.0, "total": 0.0},
+                "target_policy_probability": 0.2,
+            },
+        ]
+        return {
+            "task_id": task_id,
+            "partition": partition,
+            "input": {"initial_screenshots": []},
+            "target": {"intent": candidates[0]["text"]},
+            "metadata": {"papo_episode_id": f"{task_id}__20250101_000000"},
+            "candidates": candidates,
+            "pairs": [
+                {
+                    "chosen_candidate_id": "oracle",
+                    "rejected_candidate_id": candidate["candidate_id"],
+                    "chosen": candidates[0]["text"],
+                    "rejected": candidate["text"],
+                    "chosen_source": "oracle_target",
+                    "rejected_source": candidate["source"],
+                    "reward_gap": 0.5,
+                    "weight": 1.0,
+                    "target_preference_probability": 0.9,
+                }
+                for candidate in candidates[1:]
+            ],
+        }
 
     @staticmethod
     def task(

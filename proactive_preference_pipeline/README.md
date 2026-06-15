@@ -41,6 +41,28 @@ R = 0.55 R_task + 0.20 R_user + 0.15 R_context + 0.10 R_specificity
 Every component, source episode, final reward, listwise probability, DPO gap,
 weight, and soft preference target is stored in the generated artifacts.
 
+Before export, the candidate-quality gate labels every non-oracle candidate as
+`valid_hard_negative`, `easy_negative`, `pseudo_negative`, or `invalid`.
+Structural failures block training; proxy semantic concerns are reported as
+warnings for sampled human review. Invalid candidates are excluded from
+Listwise export, and pseudo/invalid candidates can never become DPO rejected
+responses. Reports are written to:
+
+- `data/proactive_preference/candidate_quality_report.json`
+- `data/proactive_preference/candidate_quality_flags.jsonl`
+- `data/proactive_preference/candidate_quality_review_sample.jsonl`
+
+The default proxy tiers are explicit and configurable:
+
+- `invalid`: empty/too-short, corrupted, control-character, or repeated-character output;
+- `pseudo_negative`: lexical target similarity at least `0.92`, conservatively excluded from DPO rejection;
+- `easy_negative`: both target and same-user-history similarity at most `0.20`;
+- `valid_hard_negative`: structurally valid remaining alternatives.
+
+These labels are not semantic ground truth. The balanced review sample must be
+inspected before a main paper run, especially for near-target candidates whose
+small textual differences may still change the task.
+
 ## Safety Properties
 
 - Train and temporal eval targets remain disjoint.
