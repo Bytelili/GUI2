@@ -15,7 +15,13 @@ from ppipeline.audit import audit_preference_sets  # noqa: E402
 from ppipeline.candidates import build_candidate_sets, model_candidate_map  # noqa: E402
 from ppipeline.export import export_preference_datasets, preference_dataset_info  # noqa: E402
 from ppipeline.io_utils import read_jsonl, sha256_file, write_json, write_jsonl  # noqa: E402
-from ppipeline.quality import QualityThresholds, audit_candidate_quality, build_quality_review_sample  # noqa: E402
+from ppipeline.quality import (  # noqa: E402
+    QualityThresholds,
+    audit_candidate_quality,
+    build_quality_review_sample,
+    drop_invalid_oracle_targets,
+    invalid_oracle_targets,
+)
 from ppipeline.rewards import RewardWeights, score_candidate_sets  # noqa: E402
 
 
@@ -104,6 +110,14 @@ def main() -> None:
         max_invalid_negative_rate=args.max_invalid_negative_rate,
         max_tasks_without_usable_negative_rate=args.max_tasks_without_usable_negative_rate,
     )
+    work_dir.mkdir(parents=True, exist_ok=True)
+    train_scored, excluded_train_oracles = drop_invalid_oracle_targets(
+        train_scored,
+        thresholds=quality_thresholds,
+    )
+    eval_invalid_oracles = invalid_oracle_targets(eval_scored, thresholds=quality_thresholds)
+    write_jsonl(work_dir / "candidate_quality_excluded_targets.jsonl", excluded_train_oracles)
+    write_jsonl(work_dir / "candidate_quality_eval_invalid_oracles.jsonl", eval_invalid_oracles)
     quality_audit, quality_flags = audit_candidate_quality(
         train_scored,
         eval_scored,
@@ -113,7 +127,21 @@ def main() -> None:
             "eval": bool(eval_model),
         },
     )
-    work_dir.mkdir(parents=True, exist_ok=True)
+    quality_audit["excluded_train_invalid_oracle_targets"] = {
+        "count": len(excluded_train_oracles),
+        "policy": "excluded_from_preference_training_only",
+        "path": str(work_dir / "candidate_quality_excluded_targets.jsonl"),
+    }
+    quality_audit["eval_invalid_oracle_targets"] = {
+        "count": len(eval_invalid_oracles),
+        "policy": "hard_fail_if_nonzero",
+        "path": str(work_dir / "candidate_quality_eval_invalid_oracles.jsonl"),
+    }
+    if eval_invalid_oracles:
+        quality_audit["hard_failures"].append(
+            f"eval: invalid_oracle_targets={len(eval_invalid_oracles)}"
+        )
+        quality_audit["status"] = "failed"
     write_json(work_dir / "candidate_quality_report.json", quality_audit)
     write_jsonl(work_dir / "candidate_quality_flags.jsonl", quality_flags)
     write_jsonl(

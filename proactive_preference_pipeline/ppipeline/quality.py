@@ -79,6 +79,38 @@ def audit_candidate_quality(
     )
 
 
+def drop_invalid_oracle_targets(
+    rows: list[dict[str, Any]],
+    *,
+    thresholds: QualityThresholds | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    excluded = invalid_oracle_targets(rows, thresholds=thresholds)
+    excluded_ids = {str(row.get("task_id") or "") for row in excluded}
+    return [row for row in rows if str(row.get("task_id") or "") not in excluded_ids], excluded
+
+
+def invalid_oracle_targets(
+    rows: list[dict[str, Any]],
+    *,
+    thresholds: QualityThresholds | None = None,
+) -> list[dict[str, Any]]:
+    thresholds = thresholds or QualityThresholds()
+    thresholds.validate()
+    invalid: list[dict[str, Any]] = []
+    for row in rows:
+        oracle = next(
+            (candidate for candidate in row.get("candidates", []) if candidate.get("source") == "oracle_target"),
+            None,
+        )
+        if oracle is None:
+            invalid.append(_invalid_oracle_record(row, {}, ["missing_oracle_target"]))
+            continue
+        reasons = _structural_reasons(str(oracle.get("text") or ""), thresholds)
+        if reasons:
+            invalid.append(_invalid_oracle_record(row, oracle, reasons))
+    return invalid
+
+
 def build_quality_review_sample(
     train_sets: list[dict[str, Any]],
     eval_sets: list[dict[str, Any]],
@@ -340,6 +372,27 @@ def _flag_record(
         "reasons": reasons,
         "text": candidate.get("text", ""),
         "reward": candidate.get("reward", {}),
+    }
+
+
+def _invalid_oracle_record(
+    row: dict[str, Any],
+    oracle: dict[str, Any],
+    reasons: list[str],
+) -> dict[str, Any]:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    target = row.get("target") if isinstance(row.get("target"), dict) else {}
+    inputs = row.get("input") if isinstance(row.get("input"), dict) else {}
+    return {
+        "partition": row.get("partition", ""),
+        "task_id": row.get("task_id", ""),
+        "target_episode_id": metadata.get("papo_episode_id", ""),
+        "time": inputs.get("time", ""),
+        "scenario": inputs.get("scenario", ""),
+        "target": target.get("intent", ""),
+        "oracle_candidate_id": oracle.get("candidate_id", ""),
+        "oracle_text": oracle.get("text", ""),
+        "reasons": reasons,
     }
 
 

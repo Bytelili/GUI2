@@ -51,6 +51,7 @@ responses. Reports are written to:
 - `data/proactive_preference/candidate_quality_report.json`
 - `data/proactive_preference/candidate_quality_flags.jsonl`
 - `data/proactive_preference/candidate_quality_review_sample.jsonl`
+- `data/proactive_preference/candidate_quality_excluded_targets.jsonl`
 
 The default proxy tiers are explicit and configurable:
 
@@ -62,6 +63,11 @@ The default proxy tiers are explicit and configurable:
 These labels are not semantic ground truth. The balanced review sample must be
 inspected before a main paper run, especially for near-target candidates whose
 small textual differences may still change the task.
+
+If a strict-train oracle target is structurally invalid, the pipeline excludes
+that target from preference optimization and records it in
+`candidate_quality_excluded_targets.jsonl`. Eval oracle targets are never
+silently excluded.
 
 ## Safety Properties
 

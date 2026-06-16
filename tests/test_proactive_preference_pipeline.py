@@ -274,6 +274,62 @@ class ProactivePreferencePipelineTest(unittest.TestCase):
                     training_path,
                 )
 
+    def test_build_cli_excludes_invalid_train_oracle_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            train_path = root / "train.jsonl"
+            eval_path = root / "eval.jsonl"
+            history_path = root / "history.csv"
+            work_dir = root / "work"
+            dataset_dir = root / "datasets"
+            train_tasks = self.train_tasks + [
+                self.task("bad", "3", "20250104_080000", "home", "x", [])
+            ]
+            self.write_jsonl(train_path, train_tasks)
+            self.write_jsonl(eval_path, self.eval_tasks)
+            with history_path.open("w", encoding="utf-8-sig", newline="") as file:
+                writer = csv.DictWriter(file, fieldnames=["user_id", "time"])
+                writer.writeheader()
+                writer.writerows(
+                    [
+                        {"user_id": "1", "time": "20250101_080000"},
+                        {"user_id": "2", "time": "20250102_080000"},
+                        {"user_id": "3", "time": "20250104_080000"},
+                    ]
+                )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(PIPELINE_ROOT / "build_preferences.py"),
+                    "--train-tasks",
+                    str(train_path),
+                    "--eval-tasks",
+                    str(eval_path),
+                    "--protocol-history",
+                    str(history_path),
+                    "--work-dir",
+                    str(work_dir),
+                    "--dataset-dir",
+                    str(dataset_dir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            manifest = json.loads((work_dir / "preference_manifest.json").read_text(encoding="utf-8"))
+            excluded = [
+                json.loads(line)
+                for line in (work_dir / "candidate_quality_excluded_targets.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+                if line.strip()
+            ]
+            self.assertEqual(manifest["status"], "passed")
+            self.assertEqual(manifest["candidate_quality"]["excluded_train_invalid_oracle_targets"]["count"], 1)
+            self.assertEqual(excluded[0]["task_id"], "suggestion__bad")
+            self.assertEqual(excluded[0]["reasons"], ["too_short"])
+            self.assertEqual(manifest["partitions"]["train"]["targets"], 1)
+
     def test_rendered_configs_chain_sft_listwise_and_dpo(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
