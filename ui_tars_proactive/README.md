@@ -18,6 +18,10 @@ Outputs:
 - `reports/ui_tars_proactive/summary/<mode>_ui_tars_level_results.md`
 - `reports/ui_tars_proactive/summary/<mode>_ui_tars_sft_minus_base.csv`
 
+Smoke runs with `LIMIT>0` are written under
+`reports/ui_tars_proactive/smoke_limit_<LIMIT>/...` so their one-shard resume
+identity cannot collide with the formal four-shard evaluation.
+
 The default training config is conservative for four 96GB GPUs:
 `per_device_train_batch_size=4`, `gradient_accumulation_steps=4`,
 `gradient_checkpointing=true`, effective global batch size 64.

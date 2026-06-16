@@ -81,7 +81,11 @@ evaluate_one() {
   local model_label="$1"
   local adapter="$2"
   local level="$3"
-  local run_root="$REPORT_ROOT/$model_label/$MODE"
+  local effective_report_root="$REPORT_ROOT"
+  if [[ "$LIMIT" -gt 0 ]]; then
+    effective_report_root="$REPORT_ROOT/smoke_limit_${LIMIT}"
+  fi
+  local run_root="$effective_report_root/$model_label/$MODE"
   local run_dir="$run_root/level_$level"
   local tasks="$ROOT_DIR/data/papo_tasks/proactive_test_${MODE}_level_${level}.jsonl"
   local result_csv="$run_dir/${model_label}_${MODE}_level_${level}.csv"
