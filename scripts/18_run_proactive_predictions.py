@@ -29,6 +29,11 @@ def main() -> None:
     parser.add_argument("--config", default=str(PROJECT_ROOT / "config.yaml"))
     parser.add_argument("--tasks", required=True)
     parser.add_argument("--adapter", required=True)
+    parser.add_argument(
+        "--model-name-or-path",
+        default=None,
+        help="Base model path for inference. Defaults to paths.qwen_model_path in config.yaml.",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--num-shards", type=int, default=1)
@@ -44,7 +49,7 @@ def main() -> None:
     adapter_dir = Path(args.adapter).resolve()
     output_path = Path(args.output).resolve()
     _validate_adapter(adapter_dir, config)
-    model_path = Path(str(config["paths"]["qwen_model_path"]))
+    model_path = Path(str(args.model_name_or_path or config["paths"]["qwen_model_path"])).resolve()
     if not model_path.is_dir():
         raise FileNotFoundError(f"Configured base model directory does not exist: {model_path}")
     _validate_resume_identity(
@@ -53,6 +58,7 @@ def main() -> None:
         task_path,
         adapter_dir,
         output_path,
+        model_path,
         args.shard_index,
         args.num_shards,
         args.max_new_tokens,
@@ -78,7 +84,7 @@ def main() -> None:
 
     model = ChatModel(
         {
-            "model_name_or_path": str(config["paths"]["qwen_model_path"]),
+            "model_name_or_path": str(model_path),
             "adapter_name_or_path": str(adapter_dir),
             "template": str(config["training"]["template"]),
             "finetuning_type": "lora",
@@ -163,6 +169,7 @@ def _validate_resume_identity(
     task_path: Path,
     adapter_dir: Path,
     output_path: Path,
+    model_path: Path,
     shard_index: int,
     num_shards: int,
     max_new_tokens: int,
@@ -170,7 +177,7 @@ def _validate_resume_identity(
     identity = {
         "config_path": str(config_file),
         "config_sha256": sha256_file(config_file),
-        "model_name_or_path": str(config["paths"]["qwen_model_path"]),
+        "model_name_or_path": str(model_path),
         "template": str(config["training"]["template"]),
         "do_sample": False,
         "max_new_tokens": max_new_tokens,
