@@ -218,7 +218,8 @@ summarize_adapter() {
   python ui_tars_proactive/summarize_results.py \
     --reports-root "$REPORT_ROOT" \
     --mode "$MODE" \
-    --models "$EVAL_MODEL_LABEL"
+    --models "$EVAL_MODEL_LABEL" \
+    --output-dir "$REPORT_ROOT/summary/$EVAL_MODEL_LABEL"
 }
 
 case "$ACTION" in
