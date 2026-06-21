@@ -11,6 +11,8 @@ UI_TARS_MODEL="${UI_TARS_MODEL:-/home/dumike/zyy/GUI/backbone/UI-TARS-7B}"
 UI_TARS_TEMPLATE="${UI_TARS_TEMPLATE:-qwen2_vl}"
 SFT_CONFIG="${SFT_CONFIG:-$ROOT_DIR/configs/llamafactory/generated/ui_tars_7b_proactive_sft.yaml}"
 SFT_ADAPTER="${SFT_ADAPTER:-$ROOT_DIR/LLaMA-Factory/saves/papo/ui_tars_7b_proactive_sft_clean_v2_best}"
+EVAL_MODEL_LABEL="${EVAL_MODEL_LABEL:-}"
+EVAL_ADAPTER="${EVAL_ADAPTER:-}"
 REPORT_ROOT="${REPORT_ROOT:-$ROOT_DIR/reports/ui_tars_proactive}"
 EMBEDDING_MODEL="$ROOT_DIR/models/paraphrase-multilingual-MiniLM-L12-v2"
 ACTION="${1:-audit}"
@@ -208,6 +210,17 @@ summarize() {
     --models ui_tars_7b_base ui_tars_7b_sft
 }
 
+summarize_adapter() {
+  if [[ "$LIMIT" -gt 0 ]]; then
+    echo "LIMIT=$LIMIT, summary skipped because smoke runs do not create official metrics."
+    return
+  fi
+  python ui_tars_proactive/summarize_results.py \
+    --reports-root "$REPORT_ROOT" \
+    --mode "$MODE" \
+    --models "$EVAL_MODEL_LABEL"
+}
+
 case "$ACTION" in
   audit)
     validate_common
@@ -229,6 +242,14 @@ case "$ACTION" in
     evaluate_model ui_tars_7b_sft "$SFT_ADAPTER"
     summarize
     ;;
+  eval_adapter)
+    if [[ -z "$EVAL_MODEL_LABEL" || -z "$EVAL_ADAPTER" ]]; then
+      echo "EVAL_MODEL_LABEL and EVAL_ADAPTER are required for eval_adapter." >&2
+      exit 2
+    fi
+    evaluate_model "$EVAL_MODEL_LABEL" "$EVAL_ADAPTER"
+    summarize_adapter
+    ;;
   eval_all)
     evaluate_model ui_tars_7b_base ""
     evaluate_model ui_tars_7b_sft "$SFT_ADAPTER"
@@ -244,7 +265,7 @@ case "$ACTION" in
     summarize
     ;;
   *)
-    echo "Usage: bash ui_tars_proactive/run_ui_tars_7b.sh {audit|render_sft_config|train_sft|eval_base|eval_sft|eval_all|full|summary}" >&2
+    echo "Usage: bash ui_tars_proactive/run_ui_tars_7b.sh {audit|render_sft_config|train_sft|eval_base|eval_sft|eval_adapter|eval_all|full|summary}" >&2
     exit 2
     ;;
 esac
