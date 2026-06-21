@@ -22,12 +22,22 @@ def main() -> None:
     parser.add_argument("--config", default=str(PROJECT_ROOT / "config.yaml"))
     parser.add_argument("--training-config", required=True)
     parser.add_argument("--check-only", action="store_true", help="Validate without writing a resumable gate.")
+    parser.add_argument(
+        "--adopt-completed-run",
+        action="store_true",
+        help="Gate a completed legacy v3 run only after verifying its best checkpoint still exists.",
+    )
     args = parser.parse_args()
 
     project_config = load_config(args.config)
     training_path = Path(args.training_config).resolve()
     training = yaml.safe_load(training_path.read_text(encoding="utf-8"))
-    report = validate_training(project_config, training_path, training)
+    report = validate_training(
+        project_config,
+        training_path,
+        training,
+        adopt_completed_run=args.adopt_completed_run,
+    )
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
     if not args.check_only:
@@ -44,6 +54,8 @@ def validate_training(
     project_config: dict[str, Any],
     training_path: Path,
     training: dict[str, Any],
+    *,
+    adopt_completed_run: bool = False,
 ) -> dict[str, Any]:
     dataset_names = _names(training.get("dataset"))
     eval_names = _names(training.get("eval_dataset"))
@@ -52,14 +64,20 @@ def validate_training(
     if float(training.get("val_size", 0.0) or 0.0) != 0.0:
         raise ValueError("Formal training must use val_size: 0.0 with an explicit temporal eval_dataset")
     output_dir = Path(str(training.get("output_dir") or ""))
-    if "clean_v2" not in output_dir.name and "clean_v3" not in output_dir.name:
+    is_v3_dataset = all(name.endswith("_v3") for name in dataset_names + eval_names)
+    is_named_clean = "clean_v2" in output_dir.name or "clean_v3" in output_dir.name
+    is_legacy_v3_adoption = adopt_completed_run and is_v3_dataset and output_dir.name.endswith("_v3")
+    if not is_named_clean and not is_legacy_v3_adoption:
         raise ValueError(f"Formal output_dir must use a clean_v2 or clean_v3 name, got: {output_dir}")
     if training.get("load_best_model_at_end"):
         raise ValueError("load_best_model_at_end must remain false; use the post-training finalizer")
     if training.get("save_steps") != training.get("eval_steps"):
         raise ValueError("save_steps must equal eval_steps so every evaluated checkpoint is preserved")
-    if training.get("save_total_limit") not in {None, 0}:
+    save_total_limit = training.get("save_total_limit")
+    if save_total_limit not in {None, 0} and not adopt_completed_run:
         raise ValueError("save_total_limit must be unset so the best evaluated checkpoint cannot be pruned")
+    if adopt_completed_run and save_total_limit not in {None, 0, 1, 2, 3}:
+        raise ValueError("Completed-run adoption only permits save_total_limit values 1, 2, or 3")
 
     protocol_dir = config_path(project_config, "paths.protocol_dir")
     manifest_path = protocol_dir / "protocol_manifest.json"
@@ -77,6 +95,7 @@ def validate_training(
     _validate_rows(eval_rows, "eval", protocol_id)
     _validate_no_leakage(project_config, dataset_names + eval_names, train_rows, eval_rows)
     _validate_adapter(training)
+    completed_run = _validate_completed_run(output_dir) if adopt_completed_run else None
 
     return {
         "status": "passed",
@@ -91,6 +110,7 @@ def validate_training(
         "eval_rows": len(eval_rows),
         "protocol_manifest_sha256": sha256_file(manifest_path),
         "adapter_provenance": _adapter_provenance(training),
+        "completed_run_adoption": completed_run,
     }
 
 
@@ -215,7 +235,7 @@ def _adapter_provenance(training: dict[str, Any]) -> dict[str, Any] | None:
 
 def _validate_resume_gate(output_dir: Path, gate_path: Path, report: dict[str, Any]) -> None:
     checkpoints = list(output_dir.glob("checkpoint-*"))
-    if checkpoints and not gate_path.exists():
+    if checkpoints and not gate_path.exists() and report.get("completed_run_adoption") is None:
         raise ValueError(f"Refusing to resume checkpoints without a strict preflight gate: {output_dir}")
     if gate_path.exists():
         previous = json.loads(gate_path.read_text(encoding="utf-8"))
@@ -223,6 +243,42 @@ def _validate_resume_gate(output_dir: Path, gate_path: Path, report: dict[str, A
         changed = [key for key in keys if previous.get(key) != report.get(key)]
         if changed:
             raise ValueError(f"Refusing stale resume because gated inputs changed: {changed}")
+
+
+def _validate_completed_run(output_dir: Path) -> dict[str, Any]:
+    state_path = output_dir / "trainer_state.json"
+    adapter_path = output_dir / "adapter_model.safetensors"
+    if not state_path.exists() or not adapter_path.exists():
+        raise FileNotFoundError(
+            "Completed-run adoption requires root trainer_state.json and adapter_model.safetensors: "
+            f"{output_dir}"
+        )
+
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    global_step = int(state.get("global_step", 0) or 0)
+    records = {
+        int(item["step"]): float(item["eval_loss"])
+        for item in state.get("log_history", [])
+        if "step" in item and "eval_loss" in item
+    }
+    if global_step <= 0 or not records:
+        raise ValueError(f"Completed-run adoption found no finished training state or eval_loss: {output_dir}")
+
+    best_step, best_loss = min(records.items(), key=lambda item: (item[1], item[0]))
+    best_checkpoint = output_dir / f"checkpoint-{best_step}"
+    if best_step == global_step and not best_checkpoint.is_dir():
+        best_checkpoint = output_dir
+    if not (best_checkpoint / "adapter_model.safetensors").exists():
+        raise FileNotFoundError(
+            f"The globally best evaluated checkpoint-{best_step} was pruned and cannot be adopted: {output_dir}"
+        )
+    return {
+        "status": "verified",
+        "global_step": global_step,
+        "best_step": best_step,
+        "best_eval_loss": best_loss,
+        "best_checkpoint": str(best_checkpoint),
+    }
 
 
 def _episode_id(row: dict[str, Any]) -> str:

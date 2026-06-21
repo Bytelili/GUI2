@@ -137,6 +137,51 @@ class StrictTrainingProtocolTest(unittest.TestCase):
         report = preflight.validate_training(project_config, training_path, training)
         self.assertEqual(report["status"], "passed")
 
+        self.write_dataset(
+            "papo_proactive_train_listwise_v3",
+            "train",
+            ["1__20250101_120000", "2__20250101_120000"],
+        )
+        self.write_dataset(
+            "papo_proactive_eval_listwise_v3",
+            "eval",
+            ["1__20250104_120000", "2__20250104_120000"],
+        )
+        legacy_output = self.root / "ui_tars_7b_preference_listwise_v3"
+        checkpoint = legacy_output / "checkpoint-20"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "adapter_model.safetensors").write_bytes(b"best")
+        (legacy_output / "adapter_model.safetensors").write_bytes(b"final")
+        (legacy_output / "trainer_state.json").write_text(
+            json.dumps(
+                {
+                    "global_step": 30,
+                    "log_history": [
+                        {"step": 10, "eval_loss": 1.8},
+                        {"step": 20, "eval_loss": 1.2},
+                        {"step": 30, "eval_loss": 1.4},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        v3_training = {
+            **training,
+            "dataset": "papo_proactive_train_listwise_v3",
+            "eval_dataset": "papo_proactive_eval_listwise_v3",
+            "output_dir": str(legacy_output),
+            "save_total_limit": 3,
+        }
+        with self.assertRaisesRegex(ValueError, "Formal output_dir"):
+            preflight.validate_training(project_config, training_path, v3_training)
+        adopted = preflight.validate_training(
+            project_config,
+            training_path,
+            v3_training,
+            adopt_completed_run=True,
+        )
+        self.assertEqual(adopted["completed_run_adoption"]["best_step"], 20)
+
         path = self.dataset_dir / "papo_proactive_train_sft.json"
         rows = json.loads(path.read_text(encoding="utf-8"))
         rows[0]["metadata"]["history_episode_ids"] = [test_id]

@@ -62,8 +62,10 @@ def validate_preference_training(manifest_path: Path, training_path: Path) -> di
         verified[name] = {"path": str(path), "sha256": actual, "rows": record["rows"]}
 
     output_dir = Path(str(training.get("output_dir") or ""))
-    if "proactive_preference" not in output_dir.name or "clean_v2" not in output_dir.name:
+    if "proactive_preference" not in output_dir.name or ("clean_v2" not in output_dir.name and "clean_v3" not in output_dir.name):
         raise ValueError(f"Unsafe preference output directory: {output_dir}")
+    if training.get("save_total_limit") not in {None, 0}:
+        raise ValueError("save_total_limit must be unset so the best evaluated checkpoint cannot be pruned")
     stage = str(training.get("stage") or "")
     if stage == "sft":
         if not training.get("use_papo_listwise") or any(not name.endswith("_listwise") for name in expected_partition):
