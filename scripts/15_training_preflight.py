@@ -52,8 +52,8 @@ def validate_training(
     if float(training.get("val_size", 0.0) or 0.0) != 0.0:
         raise ValueError("Formal training must use val_size: 0.0 with an explicit temporal eval_dataset")
     output_dir = Path(str(training.get("output_dir") or ""))
-    if "clean_v2" not in output_dir.name:
-        raise ValueError(f"Formal output_dir must use a clean_v2 name, got: {output_dir}")
+    if "clean_v2" not in output_dir.name and "clean_v3" not in output_dir.name:
+        raise ValueError(f"Formal output_dir must use a clean_v2 or clean_v3 name, got: {output_dir}")
     if training.get("load_best_model_at_end"):
         raise ValueError("load_best_model_at_end must remain false; use the post-training finalizer")
     if training.get("save_steps") != training.get("eval_steps"):
