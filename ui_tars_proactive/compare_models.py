@@ -128,10 +128,12 @@ def indexed_rows(path: Path) -> dict[str, dict[str, str]]:
 def paired_row(level: int, reference: dict[str, str], candidate: dict[str, str]) -> dict[str, Any]:
     if str(reference.get("original_intent") or "") != str(candidate.get("original_intent") or ""):
         raise ValueError(f"Ground truth differs for task: {reference.get('task_id')}")
+    task_id = reference["task_id"]
+    user_id = str(reference.get("user_id") or candidate.get("user_id") or task_user_id(task_id))
     return {
         "level": level,
-        "task_id": reference["task_id"],
-        "user_id": str(reference.get("user_id") or candidate.get("user_id") or ""),
+        "task_id": task_id,
+        "user_id": user_id,
         "original_intent": reference.get("original_intent", ""),
         "reference_prediction": reference.get("predicted_intent", ""),
         "candidate_prediction": candidate.get("predicted_intent", ""),
@@ -143,6 +145,11 @@ def paired_row(level: int, reference: dict[str, str], candidate: dict[str, str])
         "time_delta": number(candidate["time"]) - number(reference["time"]),
         "token_delta": number(candidate["token"]) - number(reference["token"]),
     }
+
+
+def task_user_id(task_id: str) -> str:
+    parts = task_id.split("__")
+    return parts[1] if len(parts) >= 3 else task_id
 
 
 def macro_task_row(rows: list[dict[str, Any]]) -> dict[str, Any]:
