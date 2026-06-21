@@ -13,12 +13,14 @@ from src.papo.proactive_listwise_v4 import (
     V4ValidationError,
     audit_source_tasks,
     build_groups,
+    build_retrieval_candidate_pools,
     build_release,
     create_candidate_requests,
     dataset_info_v4,
     import_candidate_results,
     merge_candidate_shards,
     read_jsonl,
+    retrieval_pool_map,
     sha256_file,
     verify_release,
     write_json,
@@ -179,6 +181,45 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
             expected_adapter="adapter",
         )
         self.assertEqual(report["task_count"], 2)
+
+    def test_causal_retrieval_builds_all_three_candidate_types(self) -> None:
+        target = _task("target", "train", "u1", "20260210_100000", self.image, "打开闹钟设置十点提醒")
+        similar = _task("same-intent", "train", "u1", "20260201_090000", self.image, "打开闹钟设置九点提醒")
+        context = _task("same-context", "train", "u1", "20260202_100500", self.image, "查看校园课程表")
+        context["target"]["intent_class"] = "日程管理"
+        context["target"]["app"] = "calendar.app"
+        cross = _task("cross-intent", "train", "u2", "20260203_080000", self.image, "打开闹钟设置八点提醒")
+        future = _task("future", "train", "u1", "20260220_100000", self.image, "打开闹钟设置十一点提醒")
+        copied = _task("history-copy", "train", "u1", "20260201_070000", self.image, "打开音乐")
+        rows = build_retrieval_candidate_pools(
+            [target], [target, similar, context, cross, future, copied], split="train", max_per_type=2
+        )
+        candidates = rows[0]["candidates"]
+        self.assertEqual(candidates["same_user_similar_intent"][0]["source_task_id"], "same-intent")
+        self.assertEqual(
+            candidates["same_user_similar_context_different_intent"][0]["source_task_id"], "same-context"
+        )
+        self.assertEqual(candidates["cross_user_similar_intent"][0]["source_task_id"], "cross-intent")
+        for values in candidates.values():
+            self.assertTrue(all(item["source_time"] < "20260210_100000" for item in values))
+            self.assertTrue(all(item["source_task_id"] != "history-copy" for item in values))
+        with self.assertRaisesRegex(V4ValidationError, "strict train partition"):
+            build_retrieval_candidate_pools([target], [self.eval_tasks[0]], split="train")
+
+        groups = build_groups(
+            [target],
+            split="train",
+            model_candidates={"target": ["模型生成的闹钟候选"]},
+            retrieval_candidates=retrieval_pool_map(rows),
+            synthetic_smoke=False,
+        )
+        sources = {candidate["source"] for candidate in groups[0]["candidates"]}
+        self.assertIn("same_user_similar_intent", sources)
+        self.assertIn("same_user_similar_context_different_intent", sources)
+        self.assertNotIn("cross_user_similar_intent", sources)
+        rejected = groups[0]["metadata"]["dpo_rejected_candidates"]
+        analysis = groups[0]["metadata"]["cross_user_analysis_candidates"]
+        self.assertEqual(len(rejected) + len(analysis), 1)
 
     def test_manual_review_schema_gate_release_and_hashes(self) -> None:
         source_manifest = audit_source_tasks(self.train_path, self.eval_path, self.workspace)

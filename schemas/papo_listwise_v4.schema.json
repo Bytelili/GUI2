@@ -82,7 +82,15 @@
       "properties": {
         "candidate_id": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
         "text": {"type": "string", "minLength": 1},
-        "source": {"enum": ["oracle_target", "ui_tars_sft", "same_user_hard", "synthetic_smoke"]},
+        "source": {
+          "enum": [
+            "oracle_target",
+            "ui_tars_sft",
+            "same_user_similar_intent",
+            "same_user_similar_context_different_intent",
+            "synthetic_smoke"
+          ]
+        },
         "reward": {
           "type": "object",
           "additionalProperties": false,

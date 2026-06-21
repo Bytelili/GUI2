@@ -64,6 +64,8 @@ def audit_v4_groups(
     reviewed = 0
     candidate_total = 0
     unavailable_image_count = 0
+    cross_user_rejected_count = 0
+    cross_user_analysis_count = 0
     split_oracle_hashes: dict[str, set[str]] = {"train": set(), "eval": set()}
 
     def add(severity: str, category: str, split: str, group_id: str, detail: str, candidate_id: str = "") -> None:
@@ -99,6 +101,31 @@ def audit_v4_groups(
             if not oracle_hash:
                 add("block", "missing_target_identity_hash", split, group_id, "target_identity_sha256 is required")
             split_oracle_hashes[split].add(oracle_hash)
+            for field, expected_eligibility in (
+                ("dpo_rejected_candidates", {"dpo_rejected"}),
+                (
+                    "cross_user_analysis_candidates",
+                    {"analysis_only_pseudo_negative_risk", "dpo_rejected_review_required"},
+                ),
+            ):
+                values = metadata.get(field) or []
+                if not isinstance(values, list):
+                    add("block", "invalid_cross_user_pool", split, group_id, f"{field} must be a list")
+                    continue
+                for item in values:
+                    if not isinstance(item, dict) or item.get("source") != "cross_user_similar_intent":
+                        add("block", "invalid_cross_user_pool", split, group_id, f"invalid record in {field}")
+                        continue
+                    if item.get("eligibility") not in expected_eligibility:
+                        add("block", "cross_user_eligibility_mismatch", split, group_id, str(item.get("candidate_id")))
+                    if str(item.get("source_user_id") or "") == str(metadata.get("user_id") or ""):
+                        add("block", "cross_user_identity_mismatch", split, group_id, str(item.get("candidate_id")))
+                    if not str(item.get("source_time") or "") < str(metadata.get("target_time") or ""):
+                        add("block", "cross_user_non_causal", split, group_id, str(item.get("candidate_id")))
+                    if field == "dpo_rejected_candidates":
+                        cross_user_rejected_count += 1
+                    else:
+                        cross_user_analysis_count += 1
 
             messages = group.get("messages")
             if not isinstance(messages, list) or not messages:
@@ -171,7 +198,7 @@ def audit_v4_groups(
                     add("block", "invalid_candidate_text", split, group_id, text, candidate_id)
                 if key and key in normalize_text(prompt) and source != "oracle_target":
                     add("block", "prompt_history_copy", split, group_id, "candidate appears verbatim in prompt/history", candidate_id)
-                if source == "cross_user_hard":
+                if source.startswith("cross_user"):
                     add("block", "cross_user_positive_candidate", split, group_id, "cross-user candidate cannot receive positive mass", candidate_id)
                 reward = candidate.get("reward")
                 required_reward = {"R_task", "R_user", "R_context", "R_specificity", "total"}
@@ -181,6 +208,11 @@ def audit_v4_groups(
                 else:
                     reward_totals.append(float(reward["total"]))
                 candidate_metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+                if source.startswith("same_user_"):
+                    if str(candidate_metadata.get("source_user_id") or "") != str(metadata.get("user_id") or ""):
+                        add("block", "same_user_identity_mismatch", split, group_id, source, candidate_id)
+                    if not str(candidate_metadata.get("source_time") or "") < str(metadata.get("target_time") or ""):
+                        add("block", "same_user_non_causal", split, group_id, source, candidate_id)
                 if candidate_metadata.get("rank") != expected_ranks[index]:
                     add("block", "rank_probability_mismatch", split, group_id, f"candidate rank != {expected_ranks[index]}", candidate_id)
                 try:
@@ -243,6 +275,8 @@ def audit_v4_groups(
         "group_counts": {"train": len(train_groups), "eval": len(eval_groups)},
         "candidate_count": candidate_total,
         "unavailable_image_count": unavailable_image_count,
+        "cross_user_rejected_count": cross_user_rejected_count,
+        "cross_user_analysis_count": cross_user_analysis_count,
         "block_count": block_count,
         "warning_count": warning_count,
         "issue_counts": dict(Counter(issue.category for issue in issues)),

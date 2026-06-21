@@ -12,13 +12,16 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from papo.proactive_listwise_v4 import (  # noqa: E402
     V4ValidationError,
     build_groups,
+    build_retrieval_candidate_pools,
     build_release,
     load_candidate_map,
     read_jsonl,
+    retrieval_pool_map,
     sha256_file,
     sha256_json,
     stratified_tasks,
     write_json,
+    write_jsonl,
 )
 from papo.proactive_quality_gate_v4 import audit_v4_groups, write_quality_outputs  # noqa: E402
 
@@ -59,8 +62,18 @@ def main() -> None:
         if not args.synthetic_smoke and (not args.train_candidates or not args.eval_candidates):
             raise V4ValidationError("missing formal candidates; use --synthetic-smoke only for smoke_v4")
 
-        train_tasks = stratified_tasks(read_jsonl(args.train_tasks), args.train_limit if args.release_kind == "smoke_v4" else 0, args.seed)
-        eval_tasks = stratified_tasks(read_jsonl(args.eval_tasks), args.eval_limit if args.release_kind == "smoke_v4" else 0, args.seed + 1)
+        all_train_tasks = read_jsonl(args.train_tasks)
+        all_eval_tasks = read_jsonl(args.eval_tasks)
+        train_tasks = stratified_tasks(all_train_tasks, args.train_limit if args.release_kind == "smoke_v4" else 0, args.seed)
+        eval_tasks = stratified_tasks(all_eval_tasks, args.eval_limit if args.release_kind == "smoke_v4" else 0, args.seed + 1)
+        train_pool_rows = build_retrieval_candidate_pools(
+            train_tasks, all_train_tasks, split="train"
+        )
+        eval_pool_rows = build_retrieval_candidate_pools(
+            eval_tasks, all_train_tasks, split="eval"
+        )
+        train_retrieval = retrieval_pool_map(train_pool_rows)
+        eval_retrieval = retrieval_pool_map(eval_pool_rows)
         train_map = eval_map = None
         candidate_provenance = None
         if args.train_candidates and args.eval_candidates:
@@ -76,8 +89,20 @@ def main() -> None:
                 "train_provenance_sample": next(iter(train_provenance.values()), None),
                 "eval_provenance_sample": next(iter(eval_provenance.values()), None),
             }
-        train_groups = build_groups(train_tasks, split="train", model_candidates=train_map, synthetic_smoke=args.synthetic_smoke)
-        eval_groups = build_groups(eval_tasks, split="eval", model_candidates=eval_map, synthetic_smoke=args.synthetic_smoke)
+        train_groups = build_groups(
+            train_tasks,
+            split="train",
+            model_candidates=train_map,
+            retrieval_candidates=train_retrieval,
+            synthetic_smoke=args.synthetic_smoke,
+        )
+        eval_groups = build_groups(
+            eval_tasks,
+            split="eval",
+            model_candidates=eval_map,
+            retrieval_candidates=eval_retrieval,
+            synthetic_smoke=args.synthetic_smoke,
+        )
         if args.train_reviewed_groups and args.eval_reviewed_groups:
             train_groups = json.loads(args.train_reviewed_groups.read_text(encoding="utf-8", errors="strict"))
             eval_groups = json.loads(args.eval_reviewed_groups.read_text(encoding="utf-8", errors="strict"))
@@ -86,6 +111,8 @@ def main() -> None:
             if {group.get("task_id") for group in eval_groups} != {task.get("task_id") for task in eval_tasks}:
                 raise V4ValidationError("reviewed eval groups do not exactly cover the selected strict tasks")
         intermediate = args.workspace / "intermediate"
+        write_jsonl(intermediate / "retrieval_candidate_pool_train_selected_v4.jsonl", train_pool_rows)
+        write_jsonl(intermediate / "retrieval_candidate_pool_eval_selected_v4.jsonl", eval_pool_rows)
         write_json(intermediate / "papo_proactive_train_listwise_v4.groups.json", train_groups)
         write_json(intermediate / "papo_proactive_eval_listwise_v4.groups.json", eval_groups)
         quality, issues = audit_v4_groups(

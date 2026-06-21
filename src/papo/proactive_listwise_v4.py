@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 import re
 import tarfile
+import time
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterable, Iterator
+from uuid import uuid4
 
 
 PROTOCOL_ID = "fingertip20k_strict_temporal_v2"
@@ -45,19 +48,34 @@ def sha256_json(value: Any) -> str:
 def write_json(path: str | Path, value: Any) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary = destination.with_name(f"{destination.name}.{os.getpid()}.{uuid4().hex}.tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(destination)
+    _atomic_replace(temporary, destination)
 
 
 def write_jsonl(path: str | Path, rows: Iterable[dict[str, Any]]) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary = destination.with_name(f"{destination.name}.{os.getpid()}.{uuid4().hex}.tmp")
     with temporary.open("w", encoding="utf-8", newline="\n") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
-    temporary.replace(destination)
+    _atomic_replace(temporary, destination)
+
+
+def _atomic_replace(temporary: Path, destination: Path) -> None:
+    try:
+        for attempt in range(8):
+            try:
+                temporary.replace(destination)
+                return
+            except PermissionError:
+                if attempt == 7:
+                    raise
+                time.sleep(0.25 * (attempt + 1))
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def iter_jsonl(path: str | Path) -> Iterator[tuple[int, dict[str, Any]]]:
@@ -593,10 +611,20 @@ def _specificity(text: str) -> float:
 
 def _candidate_reward(text: str, target: str, source: str) -> dict[str, float]:
     task = _similarity(text, target)
-    user = {"oracle_target": 1.0, "same_user_hard": 0.8, "ui_tars_sft": 0.5, "synthetic_smoke": 0.5}.get(
-        source, 0.0
-    )
-    context = 1.0 if source in {"oracle_target", "ui_tars_sft", "synthetic_smoke"} else 0.7
+    user = {
+        "oracle_target": 1.0,
+        "same_user_similar_intent": 0.9,
+        "same_user_similar_context_different_intent": 0.8,
+        "ui_tars_sft": 0.5,
+        "synthetic_smoke": 0.5,
+    }.get(source, 0.0)
+    context = {
+        "oracle_target": 1.0,
+        "same_user_similar_intent": 0.8,
+        "same_user_similar_context_different_intent": 0.9,
+        "ui_tars_sft": 1.0,
+        "synthetic_smoke": 1.0,
+    }.get(source, 0.0)
     specificity = _specificity(text)
     total = 0.55 * task + 0.20 * user + 0.15 * context + 0.10 * specificity
     return {
@@ -632,6 +660,218 @@ def stratified_tasks(tasks: list[dict[str, Any]], limit: int, seed: int) -> list
     return selected
 
 
+def _task_record(task: dict[str, Any]) -> dict[str, Any]:
+    inputs = task.get("input") if isinstance(task.get("input"), dict) else {}
+    target = task.get("target") if isinstance(task.get("target"), dict) else {}
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    intent = str(target.get("intent") or "").strip()
+    normalized = normalize_text(intent)
+    return {
+        "task_id": str(task.get("task_id") or ""),
+        "episode_id": str(metadata.get("papo_episode_id") or ""),
+        "partition": str(metadata.get("partition") or ""),
+        "protocol_id": str(metadata.get("protocol_id") or ""),
+        "user_id": str(inputs.get("user_id") or ""),
+        "time": str(inputs.get("time") or ""),
+        "scenario": str(inputs.get("scenario") or ""),
+        "intent": intent,
+        "_normalized_intent": normalized,
+        "_intent_bigrams": {
+            normalized[index : index + 2]
+            for index in range(max(1, len(normalized) - 1))
+            if normalized[index : index + 2]
+        },
+        "intent_class": str(target.get("intent_class") or ""),
+        "app": str(target.get("app") or ""),
+    }
+
+
+def _retrieval_similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
+    left_grams = left["_intent_bigrams"]
+    right_grams = right["_intent_bigrams"]
+    if not left_grams or not right_grams:
+        return 0.0
+    return 2.0 * len(left_grams & right_grams) / (len(left_grams) + len(right_grams))
+
+
+def _hour_similarity(left: str, right: str) -> float:
+    try:
+        left_hour = int(left.split("_", 1)[1][:2])
+        right_hour = int(right.split("_", 1)[1][:2])
+    except (IndexError, TypeError, ValueError):
+        return 0.0
+    distance = min(abs(left_hour - right_hour), 24 - abs(left_hour - right_hour))
+    return 1.0 - distance / 12.0
+
+
+def _retrieval_candidate(
+    target: dict[str, Any],
+    source: dict[str, Any],
+    relation: str,
+    score: float,
+    *,
+    eligibility: str,
+) -> dict[str, Any]:
+    similarity = _retrieval_similarity(target, source)
+    return {
+        "candidate_id": sha256_json([target["task_id"], relation, source["episode_id"], normalize_text(source["intent"])])[:24],
+        "text": source["intent"],
+        "source": relation,
+        "source_task_id": source["task_id"],
+        "source_episode_id": source["episode_id"],
+        "source_user_id": source["user_id"],
+        "source_time": source["time"],
+        "source_scenario": source["scenario"],
+        "source_intent_class": source["intent_class"],
+        "source_app": source["app"],
+        "retrieval": {
+            "semantic_similarity": similarity,
+            "scenario_match": target["scenario"] == source["scenario"],
+            "hour_similarity": _hour_similarity(target["time"], source["time"]),
+            "score": score,
+            "strictly_before_target": source["time"] < target["time"],
+        },
+        "eligibility": eligibility,
+    }
+
+
+def build_retrieval_candidate_pools(
+    target_tasks: list[dict[str, Any]],
+    reference_tasks: list[dict[str, Any]],
+    *,
+    split: str,
+    max_per_type: int = 2,
+    pseudo_negative_similarity: float = 0.55,
+) -> list[dict[str, Any]]:
+    r"""Build causal retrieval pools without using eval targets as references."""
+    if split not in {"train", "eval"} or max_per_type < 1:
+        raise V4ValidationError("Invalid retrieval pool split or max_per_type.")
+    records = [_task_record(task) for task in reference_tasks]
+    if any(record["partition"] != "train" or record["protocol_id"] != PROTOCOL_ID for record in records):
+        raise V4ValidationError("Retrieval reference tasks must come exclusively from the strict train partition.")
+    by_user: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_class: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_app: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        by_user[record["user_id"]].append(record)
+        if record["intent_class"]:
+            by_class[record["intent_class"]].append(record)
+        if record["app"]:
+            by_app[record["app"]].append(record)
+
+    pools: list[dict[str, Any]] = []
+    for task in target_tasks:
+        target = _task_record(task)
+        if target["partition"] != split or target["protocol_id"] != PROTOCOL_ID:
+            raise V4ValidationError(f"Retrieval target partition/protocol mismatch: {target['task_id']}")
+        inputs = task.get("input") if isinstance(task.get("input"), dict) else {}
+        history_texts = {
+            normalize_text(item.get("intent"))
+            for item in inputs.get("previous_intents", [])
+            if isinstance(item, dict) and normalize_text(item.get("intent"))
+        }
+        exclusions: Counter[str] = Counter()
+
+        same_similar: list[tuple[float, dict[str, Any]]] = []
+        same_context: list[tuple[float, dict[str, Any]]] = []
+        for source in by_user.get(target["user_id"], []):
+            if not source["time"] or source["time"] >= target["time"] or source["task_id"] == target["task_id"]:
+                exclusions["not_strictly_earlier"] += 1
+                continue
+            key = normalize_text(source["intent"])
+            if not key:
+                exclusions["empty_intent"] += 1
+                continue
+            if any(key in history_key or history_key in key for history_key in history_texts):
+                exclusions["verbatim_prompt_history_copy"] += 1
+                continue
+            if key == normalize_text(target["intent"]):
+                exclusions["oracle_text_duplicate"] += 1
+                continue
+            similarity = _retrieval_similarity(target, source)
+            scenario = float(bool(target["scenario"]) and target["scenario"] == source["scenario"])
+            hour = _hour_similarity(target["time"], source["time"])
+            same_intent_family = bool(
+                (target["intent_class"] and target["intent_class"] == source["intent_class"])
+                or (target["app"] and target["app"] == source["app"])
+            )
+            if same_intent_family:
+                same_similar.append((0.65 * similarity + 0.20 * scenario + 0.15 * hour, source))
+            elif scenario > 0.0 or hour >= 0.75:
+                same_context.append((0.15 * similarity + 0.55 * scenario + 0.30 * hour, source))
+
+        cross_sources: dict[str, dict[str, Any]] = {}
+        for source in by_class.get(target["intent_class"], []):
+            cross_sources[source["task_id"]] = source
+        for source in by_app.get(target["app"], []):
+            cross_sources[source["task_id"]] = source
+        cross_similar: list[tuple[float, dict[str, Any], str]] = []
+        for source in cross_sources.values():
+            if source["user_id"] == target["user_id"]:
+                continue
+            if not source["time"] or source["time"] >= target["time"]:
+                exclusions["cross_user_not_strictly_earlier"] += 1
+                continue
+            key = normalize_text(source["intent"])
+            if not key:
+                continue
+            similarity = _retrieval_similarity(target, source)
+            scenario = float(bool(target["scenario"]) and target["scenario"] == source["scenario"])
+            hour = _hour_similarity(target["time"], source["time"])
+            score = 0.75 * similarity + 0.15 * scenario + 0.10 * hour
+            eligibility = (
+                "analysis_only_pseudo_negative_risk"
+                if similarity >= pseudo_negative_similarity
+                else "dpo_rejected_review_required"
+            )
+            cross_similar.append((score, source, eligibility))
+
+        same_similar.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
+        same_context.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
+        cross_similar.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
+        candidates = {
+            "same_user_similar_intent": [
+                _retrieval_candidate(target, source, "same_user_similar_intent", score, eligibility="listwise")
+                for score, source in same_similar[:max_per_type]
+            ],
+            "same_user_similar_context_different_intent": [
+                _retrieval_candidate(
+                    target,
+                    source,
+                    "same_user_similar_context_different_intent",
+                    score,
+                    eligibility="listwise",
+                )
+                for score, source in same_context[:max_per_type]
+            ],
+            "cross_user_similar_intent": [
+                _retrieval_candidate(target, source, "cross_user_similar_intent", score, eligibility=eligibility)
+                for score, source, eligibility in cross_similar[:max_per_type]
+            ],
+        }
+        pools.append(
+            {
+                "task_id": target["task_id"],
+                "split": split,
+                "target_time": target["time"],
+                "target_user_id": target["user_id"],
+                "target_intent_class": target["intent_class"],
+                "reference_partition": "train",
+                "candidates": candidates,
+                "exclusion_counts": dict(exclusions),
+            }
+        )
+    return pools
+
+
+def retrieval_pool_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    return {
+        str(row.get("task_id") or ""): dict(row.get("candidates") or {})
+        for row in rows
+        if str(row.get("task_id") or "")
+    }
+
+
 def _synthetic_negative(target: str) -> str:
     return f"先询问用户是否需要{target.rstrip('。')}"
 
@@ -641,6 +881,7 @@ def build_groups(
     *,
     split: str,
     model_candidates: dict[str, list[str]] | None,
+    retrieval_candidates: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
     synthetic_smoke: bool,
     oracle_probability: float = 0.80,
 ) -> list[dict[str, Any]]:
@@ -656,19 +897,25 @@ def build_groups(
         metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
         target_text = str(target.get("intent") or "").strip()
         history_text = {normalize_text(item.get("intent")) for item in inputs.get("previous_intents", []) if isinstance(item, dict)}
-        candidate_specs: list[tuple[str, str]] = [(target_text, "oracle_target")]
+        candidate_specs: list[dict[str, Any]] = [{"text": target_text, "source": "oracle_target"}]
+        retrieval = (retrieval_candidates or {}).get(task_id, {})
+        for source_name in ("same_user_similar_intent", "same_user_similar_context_different_intent"):
+            values = retrieval.get(source_name) or []
+            if values:
+                candidate_specs.append(dict(values[0]))
         if model_candidates is not None:
             for text in model_candidates.get(task_id, []):
                 key = normalize_text(text)
                 if key and key != normalize_text(target_text) and key not in history_text:
-                    candidate_specs.append((str(text).strip(), "ui_tars_sft"))
+                    candidate_specs.append({"text": str(text).strip(), "source": "ui_tars_sft"})
                 if len(candidate_specs) >= 4:
                     break
         if synthetic_smoke and len(candidate_specs) < 2:
-            candidate_specs.append((_synthetic_negative(target_text), "synthetic_smoke"))
+            candidate_specs.append({"text": _synthetic_negative(target_text), "source": "synthetic_smoke"})
         seen: set[str] = set()
         candidates: list[dict[str, Any]] = []
-        for text, source in candidate_specs:
+        for spec in candidate_specs:
+            text, source = str(spec.get("text") or ""), str(spec.get("source") or "")
             key = normalize_text(text)
             if not key or key in seen:
                 continue
@@ -680,7 +927,15 @@ def build_groups(
                     "text": text,
                     "source": source,
                     "reward": reward,
-                    "metadata": {"rank": 0, "target_probability": 0.0},
+                    "metadata": {
+                        "rank": 0,
+                        "target_probability": 0.0,
+                        "source_task_id": spec.get("source_task_id", ""),
+                        "source_episode_id": spec.get("source_episode_id", ""),
+                        "source_user_id": spec.get("source_user_id", ""),
+                        "source_time": spec.get("source_time", ""),
+                        "retrieval": spec.get("retrieval", {}),
+                    },
                 }
             )
         if len(candidates) < 2:
@@ -730,6 +985,16 @@ def build_groups(
                         "weights": {"R_task": 0.55, "R_user": 0.20, "R_context": 0.15, "R_specificity": 0.10},
                     },
                     "release_eligibility": "synthetic_smoke_only" if synthetic_smoke else "formal_candidate_import",
+                    "dpo_rejected_candidates": [
+                        item
+                        for item in retrieval.get("cross_user_similar_intent", [])
+                        if item.get("eligibility") == "dpo_rejected"
+                    ],
+                    "cross_user_analysis_candidates": [
+                        item
+                        for item in retrieval.get("cross_user_similar_intent", [])
+                        if item.get("eligibility") != "dpo_rejected"
+                    ],
                 },
             }
         )
