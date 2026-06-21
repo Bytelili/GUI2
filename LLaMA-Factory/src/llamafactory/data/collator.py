@@ -28,6 +28,7 @@ from transformers import DataCollatorForSeq2Seq
 
 from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS
 from ..extras.packages import is_pillow_available
+from .papo_group import flatten_papo_group_features
 
 
 if is_pillow_available():
@@ -519,6 +520,12 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
                 features[key] = value.index_select(1, non_padding_indices)
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
+        grouped = any("papo_group_target" in feature for feature in features)
+        if grouped:
+            if not all("papo_group_target" in feature for feature in features):
+                raise ValueError("PAPO grouped and legacy SFT examples cannot share a batch.")
+            features, group_indices, target_probabilities, oracle_mask = flatten_papo_group_features(features)
+
         listwise_weights = torch.tensor(
             [float(feature.get("listwise_weight", 1.0)) for feature in features], dtype=torch.float32
         )
@@ -528,6 +535,10 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
         ]
         features = super().__call__(model_features)
         features["listwise_weight"] = listwise_weights
+        if grouped:
+            features["papo_group_index"] = torch.tensor(group_indices, dtype=torch.long)
+            features["papo_target_probability"] = torch.tensor(target_probabilities, dtype=torch.float32)
+            features["papo_oracle_mask"] = torch.tensor(oracle_mask, dtype=torch.bool)
         has_dummy_image = features.pop("has_dummy_image", False)
         if self.block_diag_attn and self.attn_implementation != "flash_attention_2":
             features["attention_mask"] = prepare_4d_attention_mask(features["attention_mask"], self.compute_dtype)

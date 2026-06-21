@@ -394,10 +394,79 @@ class OpenAIDatasetConverter(DatasetConverter):
         return output
 
 
+@dataclass
+class PapoGroupDatasetConverter(DatasetConverter):
+    r"""Keep a PAPO v4 candidate group intact until collation.
+
+    The source row contains prompt-only OpenAI messages and a list of candidate
+    objects.  A group is deliberately not flattened here: dataset samplers and
+    DDP must move the whole task as one indivisible item.
+    """
+
+    def __call__(self, example: dict[str, Any]) -> dict[str, Any]:
+        messages = example[self.dataset_attr.messages]
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("PAPO group requires non-empty prompt-only messages.")
+
+        role_map = {
+            self.dataset_attr.user_tag: Role.USER.value,
+            self.dataset_attr.assistant_tag: Role.ASSISTANT.value,
+            self.dataset_attr.observation_tag: Role.OBSERVATION.value,
+            self.dataset_attr.function_tag: Role.FUNCTION.value,
+            self.dataset_attr.system_tag: Role.SYSTEM.value,
+        }
+        aligned_messages: list[dict[str, str]] = []
+        system = example.get(self.dataset_attr.system, "") if self.dataset_attr.system else ""
+        for index, message in enumerate(messages):
+            role = message.get(self.dataset_attr.role_tag)
+            content = message.get(self.dataset_attr.content_tag)
+            if role not in role_map or not isinstance(content, str):
+                raise ValueError(f"Invalid PAPO group message at index {index}.")
+            if role == self.dataset_attr.system_tag and index == 0:
+                system = content
+                continue
+            aligned_messages.append({"role": role_map[role], "content": content})
+
+        if not aligned_messages or aligned_messages[-1]["role"] not in {Role.USER.value, Role.OBSERVATION.value}:
+            raise ValueError("PAPO group prompt must end with a user or observation message.")
+
+        candidates = example[self.dataset_attr.candidates]
+        probabilities = example[self.dataset_attr.target_distribution]
+        if not isinstance(candidates, list) or not isinstance(probabilities, list):
+            raise ValueError("PAPO group candidates and target_distribution must be lists.")
+        if len(candidates) != len(probabilities) or len(candidates) < 2:
+            raise ValueError("PAPO group requires matching candidate/probability lists of size >= 2.")
+
+        responses: list[list[dict[str, str]]] = []
+        for index, candidate in enumerate(candidates):
+            text = candidate.get("text") if isinstance(candidate, dict) else None
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"Invalid PAPO candidate text at index {index}.")
+            responses.append([{"role": Role.ASSISTANT.value, "content": text}])
+
+        return {
+            "_prompt": aligned_messages,
+            "_response": [],
+            "_group_responses": responses,
+            "_target_distribution": [float(value) for value in probabilities],
+            "_oracle_index": int(example[self.dataset_attr.oracle_index]),
+            "_group_id": str(example[self.dataset_attr.group_id]),
+            "_system": system,
+            "_tools": example[self.dataset_attr.tools] if self.dataset_attr.tools else "",
+            "_images": self._find_medias(example[self.dataset_attr.images]) if self.dataset_attr.images else None,
+            "_videos": self._find_medias(example[self.dataset_attr.videos]) if self.dataset_attr.videos else None,
+            "_audios": self._find_medias(example[self.dataset_attr.audios]) if self.dataset_attr.audios else None,
+            "_listwise_weight": 1.0,
+            "_preference_weight": 1.0,
+            "_preference_target": 1.0,
+        }
+
+
 DATASET_CONVERTERS = {
     "alpaca": AlpacaDatasetConverter,
     "sharegpt": SharegptDatasetConverter,
     "openai": OpenAIDatasetConverter,
+    "papo_group": PapoGroupDatasetConverter,
 }
 
 

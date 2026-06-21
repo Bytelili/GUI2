@@ -30,7 +30,7 @@ class DatasetAttr:
     # basic configs
     load_from: Literal["hf_hub", "ms_hub", "om_hub", "script", "file"]
     dataset_name: str
-    formatting: Literal["alpaca", "sharegpt", "openai"] = "alpaca"
+    formatting: Literal["alpaca", "sharegpt", "openai", "papo_group"] = "alpaca"
     ranking: bool = False
     # extra configs
     subset: str | None = None
@@ -44,6 +44,10 @@ class DatasetAttr:
     videos: str | None = None
     audios: str | None = None
     listwise_weight: str | None = None
+    candidates: str | None = None
+    target_distribution: str | None = None
+    oracle_index: str | None = None
+    group_id: str | None = None
     # dpo columns
     chosen: str | None = None
     rejected: str | None = None
@@ -87,6 +91,10 @@ class DatasetAttr:
                 "videos",
                 "audios",
                 "listwise_weight",
+                "candidates",
+                "target_distribution",
+                "oracle_index",
+                "group_id",
                 "chosen",
                 "rejected",
                 "preference_weight",

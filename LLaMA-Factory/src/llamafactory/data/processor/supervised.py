@@ -110,6 +110,39 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         # for multiturn examples, we only mask the prompt part in each prompt-response pair.
         model_inputs = defaultdict(list)
         for i in range(len(examples["_prompt"])):
+            group_responses = examples.get("_group_responses", [None] * len(examples["_prompt"]))[i]
+            if group_responses is not None:
+                if len(examples["_prompt"][i]) % 2 != 1 or len(group_responses) < 2:
+                    raise ValueError("PAPO group requires an odd prompt and at least two candidates.")
+
+                group_input_ids, group_labels = [], []
+                for response in group_responses:
+                    input_ids, labels = self._encode_data_example(
+                        prompt=examples["_prompt"][i],
+                        response=response,
+                        system=examples["_system"][i],
+                        tools=examples["_tools"][i],
+                        images=examples["_images"][i] or [],
+                        videos=examples["_videos"][i] or [],
+                        audios=examples["_audios"][i] or [],
+                    )
+                    group_input_ids.append(input_ids)
+                    group_labels.append(labels)
+
+                probabilities = [float(value) for value in examples["_target_distribution"][i]]
+                if len(probabilities) != len(group_input_ids):
+                    raise ValueError("PAPO candidate and target distribution sizes differ after tokenization.")
+                model_inputs["input_ids"].append(group_input_ids)
+                model_inputs["attention_mask"].append([[1] * len(ids) for ids in group_input_ids])
+                model_inputs["labels"].append(group_labels)
+                model_inputs["images"].append(examples["_images"][i])
+                model_inputs["videos"].append(examples["_videos"][i])
+                model_inputs["audios"].append(examples["_audios"][i])
+                model_inputs["papo_group_target"].append(probabilities)
+                model_inputs["papo_group_oracle_index"].append(int(examples["_oracle_index"][i]))
+                model_inputs["papo_group_id"].append(str(examples["_group_id"][i]))
+                continue
+
             if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) != 1:
                 logger.warning_rank0(
                     "Dropped invalid example: {}".format(examples["_prompt"][i] + examples["_response"][i])
@@ -146,6 +179,8 @@ class SupervisedDatasetProcessor(DatasetProcessor):
 @dataclass
 class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        if any(value is not None for value in examples.get("_group_responses", [])):
+            raise ValueError("PAPO grouped Listwise-v4 is incompatible with sequence packing.")
         # TODO: use `position_ids` to achieve packing
         # build inputs with format `<bos> X1 Y1 <eos> <bos> X2 Y2 <eos>`
         # and labels with format `<ignore> ... <ignore> Y1 <eos> <ignore> ... <ignore> Y2 <eos>`

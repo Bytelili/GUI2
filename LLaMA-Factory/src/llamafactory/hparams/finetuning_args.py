@@ -512,6 +512,22 @@ class FinetuningArguments(
         default=False,
         metadata={"help": "Whether to use PAPO target-policy weighted sequence NLL during SFT."},
     )
+    use_papo_group_listwise: bool = field(
+        default=False,
+        metadata={"help": "Whether to use true grouped PAPO Listwise-v4 cross entropy during SFT."},
+    )
+    papo_group_model_temperature: float = field(
+        default=1.0,
+        metadata={"help": "Model-score temperature for grouped PAPO Listwise-v4."},
+    )
+    papo_dataset_manifest: str | None = field(
+        default=None,
+        metadata={"help": "Listwise-v4 release manifest used to bind training data hashes."},
+    )
+    papo_dataset_root: str | None = field(
+        default=None,
+        metadata={"help": "Directory containing the registered Listwise-v4 dataset files."},
+    )
     use_asft_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the ASFT loss."},
@@ -570,6 +586,12 @@ class FinetuningArguments(
         self.freeze_trainable_modules: list[str] = split_arg(self.freeze_trainable_modules)
         self.freeze_extra_modules: list[str] | None = split_arg(self.freeze_extra_modules)
         self.lora_alpha: int = self.lora_alpha or self.lora_rank * 2
+        if self.use_papo_listwise and self.use_papo_group_listwise:
+            raise ValueError("`use_papo_listwise` and `use_papo_group_listwise` are mutually exclusive.")
+        if self.papo_group_model_temperature <= 0.0:
+            raise ValueError("`papo_group_model_temperature` must be positive.")
+        if self.use_papo_group_listwise and (not self.papo_dataset_manifest or not self.papo_dataset_root):
+            raise ValueError("Grouped PAPO Listwise-v4 requires `papo_dataset_manifest` and `papo_dataset_root`.")
         self.lora_target: list[str] = split_arg(self.lora_target)
         self.oft_target: list[str] = split_arg(self.oft_target)
         self.additional_target: list[str] | None = split_arg(self.additional_target)

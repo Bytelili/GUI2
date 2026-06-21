@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bytelili.github.io/GUI2/schemas/papo_listwise_v4.schema.json",
+  "title": "PAPO grouped Listwise-v4 task",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "group_id",
+    "messages",
+    "images",
+    "candidates",
+    "target_distribution",
+    "oracle_index",
+    "metadata"
+  ],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1},
+    "group_id": {"type": "string", "minLength": 1},
+    "messages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "content"],
+        "properties": {
+          "role": {"enum": ["system", "user", "observation"]},
+          "content": {"type": "string"}
+        }
+      }
+    },
+    "images": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "candidates": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "items": {"$ref": "#/$defs/candidate"}
+    },
+    "target_distribution": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 4,
+      "items": {"type": "number", "minimum": 0, "maximum": 1}
+    },
+    "oracle_index": {"type": "integer", "minimum": 0, "maximum": 3},
+    "metadata": {
+      "type": "object",
+      "required": [
+        "partition",
+        "protocol_id",
+        "papo_episode_id",
+        "history_episode_ids",
+        "target_split",
+        "history_policy",
+        "target_time",
+        "user_id",
+        "oracle_text_sha256",
+        "target_identity_sha256",
+        "release_eligibility"
+      ],
+      "properties": {
+        "partition": {"enum": ["train", "eval"]},
+        "protocol_id": {"const": "fingertip20k_strict_temporal_v2"},
+        "papo_episode_id": {"type": "string", "minLength": 1},
+        "history_episode_ids": {"type": "array", "items": {"type": "string"}},
+        "target_split": {"enum": ["proactive_train_targets.csv", "proactive_eval_targets.csv"]},
+        "history_policy": {"const": "same_user_strictly_before_target_time"},
+        "target_time": {"type": "string", "pattern": "^[0-9]{8}_[0-9]{6}$"},
+        "user_id": {"type": "string", "minLength": 1},
+        "oracle_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "target_identity_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "release_eligibility": {"enum": ["synthetic_smoke_only", "formal_candidate_import"]}
+      }
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidate_id", "text", "source", "reward", "metadata"],
+      "properties": {
+        "candidate_id": {"type": "string", "pattern": "^[0-9a-f]{24}$"},
+        "text": {"type": "string", "minLength": 1},
+        "source": {"enum": ["oracle_target", "ui_tars_sft", "same_user_hard", "synthetic_smoke"]},
+        "reward": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["R_task", "R_user", "R_context", "R_specificity", "total"],
+          "properties": {
+            "R_task": {"type": "number"},
+            "R_user": {"type": "number"},
+            "R_context": {"type": "number"},
+            "R_specificity": {"type": "number"},
+            "total": {"type": "number"}
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "required": ["rank", "target_probability"],
+          "properties": {
+            "rank": {"type": "integer", "minimum": 1, "maximum": 4},
+            "target_probability": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        }
+      }
+    }
+  }
+}

@@ -15,15 +15,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
 import json
 import os
 from functools import partial
+from pathlib import Path
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from transformers import Seq2SeqTrainer
 from typing_extensions import override
 
@@ -32,6 +33,7 @@ from ...extras.constants import IGNORE_INDEX
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
+from .papo_group_listwise import papo_group_listwise_loss, papo_listwise_loss
 
 
 if TYPE_CHECKING:
@@ -45,17 +47,34 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
-def papo_listwise_loss(logits: "torch.Tensor", labels: "torch.Tensor", weights: "torch.Tensor") -> "torch.Tensor":
-    r"""Compute target-policy weighted sequence negative log likelihood."""
-    shift_logits = logits[..., :-1, :].contiguous().float()
-    shift_labels = labels[..., 1:].contiguous().to(shift_logits.device)
-    token_losses = F.cross_entropy(
-        shift_logits.transpose(1, 2), shift_labels, ignore_index=IGNORE_INDEX, reduction="none"
-    )
-    valid_mask = shift_labels.ne(IGNORE_INDEX)
-    sequence_losses = (token_losses * valid_mask).sum(dim=1)
-    weights = weights.to(device=sequence_losses.device, dtype=sequence_losses.dtype).clamp_min(0.0)
-    return (sequence_losses * weights).sum() / weights.sum().clamp_min(torch.finfo(sequence_losses.dtype).eps)
+def _sha256_file(path: "Path") -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_papo_group_dataset_binding(manifest_path: str, dataset_root: str) -> None:
+    manifest_file, root = Path(manifest_path), Path(dataset_root)
+    if not manifest_file.is_file():
+        raise ValueError(f"PAPO Listwise-v4 manifest does not exist: {manifest_file}")
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8", errors="strict"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"Cannot read PAPO Listwise-v4 manifest: {manifest_file}: {error}") from error
+    if manifest.get("release_status") != "formal_candidate_release":
+        raise ValueError("PAPO grouped training refuses synthetic or non-formal release manifests.")
+    hashes = manifest.get("dataset_hashes")
+    if not isinstance(hashes, dict) or not hashes:
+        raise ValueError("PAPO Listwise-v4 manifest has no dataset hash bindings.")
+    for filename, expected in hashes.items():
+        dataset_file = root / filename
+        if not dataset_file.is_file():
+            raise ValueError(f"PAPO Listwise-v4 registered dataset is missing: {dataset_file}")
+        actual = _sha256_file(dataset_file)
+        if actual != expected:
+            raise ValueError(f"PAPO Listwise-v4 dataset SHA256 mismatch: {filename}: expected={expected}, actual={actual}")
 
 
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
@@ -85,6 +104,11 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             self.model_accepts_loss_kwargs = False
 
         self.finetuning_args = finetuning_args
+        if finetuning_args.use_papo_group_listwise:
+            verify_papo_group_dataset_binding(
+                finetuning_args.papo_dataset_manifest,
+                finetuning_args.papo_dataset_root,
+            )
         if gen_kwargs is not None:
             # https://github.com/huggingface/transformers/blob/v4.45.0/src/transformers/trainer_seq2seq.py#L287
             self._gen_kwargs = gen_kwargs
@@ -164,7 +188,31 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     @override
     def compute_loss(self, model, inputs, *args, **kwargs):
         listwise_weight = inputs.pop("listwise_weight", None)
-        if self.finetuning_args.use_papo_listwise:
+        group_index = inputs.pop("papo_group_index", None)
+        target_probability = inputs.pop("papo_target_probability", None)
+        oracle_mask = inputs.pop("papo_oracle_mask", None)
+        if self.finetuning_args.use_papo_group_listwise:
+            if group_index is None or target_probability is None or oracle_mask is None:
+                raise ValueError("PAPO grouped Listwise-v4 requires group, target, and oracle metadata.")
+            labels = inputs["labels"]
+            outputs = model(**inputs)
+            loss, metrics = papo_group_listwise_loss(
+                outputs.logits,
+                labels,
+                group_index,
+                target_probability,
+                oracle_mask,
+                model_temperature=self.finetuning_args.papo_group_model_temperature,
+                return_metrics=True,
+            )
+            logging_steps = max(1, int(self.args.logging_steps))
+            if model.training and self.state.global_step % logging_steps == 0:
+                last_step = getattr(self, "_last_papo_group_log_step", None)
+                if last_step != self.state.global_step:
+                    self._last_papo_group_log_step = self.state.global_step
+                    self.log({f"papo_{name}": value.item() for name, value in metrics.items()})
+            return (loss, outputs) if kwargs.get("return_outputs", False) else loss
+        elif self.finetuning_args.use_papo_listwise:
             if listwise_weight is None:
                 raise ValueError("PAPO listwise training requires the `listwise_weight` dataset column.")
             labels = inputs["labels"]
