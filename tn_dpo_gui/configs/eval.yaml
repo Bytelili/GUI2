@@ -1,12 +1,16 @@
+main_project:
+  enabled: true
+  root_config: ../config.yaml
+
 data:
-  pairs_path: artifacts/pairs/pairs.jsonl
+  pairs_path: auto
 
 checkpoints:
-  ranker_path: artifacts/ranker/ranker.pt
-  gate_path: artifacts/gate/gate.pt
+  ranker_path: auto
+  gate_path: auto
 
 evaluation:
   batch_size: 16
 
 output:
-  report_path: artifacts/eval/report.json
+  report_path: auto

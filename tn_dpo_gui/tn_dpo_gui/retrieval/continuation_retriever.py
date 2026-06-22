@@ -84,7 +84,7 @@ class ContinuationRetriever:
 
         if (
             self.fallback_current_future
-            and example.split.lower() != "test"
+            and example.split.lower() in {"train", "history"}
             and normalized_action.normalized_key() == example.current_action.normalized_key()
         ):
             candidates.append(

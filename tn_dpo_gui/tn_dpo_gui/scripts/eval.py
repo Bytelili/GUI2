@@ -8,7 +8,7 @@ from tn_dpo_gui.evaluation.eval_projection import evaluate_projection
 from tn_dpo_gui.utils.config import load_config
 from tn_dpo_gui.utils.io import write_json
 
-from . import PROJECT_ROOT, resolve_config_paths
+from . import PROJECT_ROOT, apply_main_project_layout, resolve_config_paths
 
 
 def main() -> None:
@@ -17,6 +17,17 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+    config = apply_main_project_layout(
+        config,
+        {
+            "data": {"pairs_path": "pairs_path"},
+            "checkpoints": {
+                "ranker_path": "ranker_path",
+                "gate_path": "gate_path",
+            },
+            "output": {"report_path": "eval_report_path"},
+        },
+    )
     config = resolve_config_paths(
         config,
         {

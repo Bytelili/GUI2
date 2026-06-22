@@ -85,6 +85,7 @@ def train_ranker(config: dict) -> dict:
         "model_state": model.state_dict(),
         "encoder_config": encoder.get_config(),
         "model_config": {"hidden_dim": hidden_dim, "dropout": dropout},
+        "base_model_path": str(config["training"].get("base_model_path", "")),
         "metrics": metrics,
     }
     save_checkpoint(output_dir / "ranker.pt", checkpoint)

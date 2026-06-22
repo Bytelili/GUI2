@@ -1,15 +1,11 @@
-main_project:
-  enabled: true
-  root_config: ../config.yaml
-
 input:
-  steps_path: auto
-  trajectories_path: auto
-  history_index_path: auto
+  steps_path: data/demo/steps.jsonl
+  trajectories_path: data/demo/trajectories.jsonl
+  history_index_path: data/demo/user_index.json
 
 output:
-  pairs_path: auto
-  summary_path: auto
+  pairs_path: artifacts/pairs/pairs.jsonl
+  summary_path: artifacts/pairs/summary.json
 
 encoder:
   dim: 256

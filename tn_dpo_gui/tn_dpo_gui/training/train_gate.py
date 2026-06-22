@@ -89,6 +89,7 @@ def train_gate(config: dict) -> dict:
         "encoder_config": encoder.get_config(),
         "model_config": {"hidden_dim": hidden_dim, "dropout": dropout},
         "training_config": {"gate_cost": gate_cost, "tau_g": float(config["training"].get("tau_g", 0.5)), "target_mode": target_mode},
+        "base_model_path": str(config["training"].get("base_model_path", "")),
         "metrics": metrics,
     }
     save_checkpoint(output_dir / "gate.pt", checkpoint)

@@ -1,0 +1,12 @@
+data:
+  pairs_path: artifacts/pairs/pairs.jsonl
+
+checkpoints:
+  ranker_path: artifacts/ranker/ranker.pt
+  gate_path: artifacts/gate/gate.pt
+
+evaluation:
+  batch_size: 16
+
+output:
+  report_path: artifacts/eval/report.json

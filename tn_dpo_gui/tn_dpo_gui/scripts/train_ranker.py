@@ -5,7 +5,7 @@ import argparse
 from tn_dpo_gui.training.train_ranker import train_ranker
 from tn_dpo_gui.utils.config import load_config
 
-from . import PROJECT_ROOT, resolve_config_paths
+from . import PROJECT_ROOT, apply_main_project_layout, resolve_config_paths
 
 
 def main() -> None:
@@ -14,6 +14,15 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+    config = apply_main_project_layout(
+        config,
+        {
+            "data": {"pairs_path": "pairs_path"},
+            "output": {"dir": "ranker_dir"},
+        },
+    )
+    if config.get("_main_project_layout") and not config.get("training", {}).get("base_model_path"):
+        config.setdefault("training", {})["base_model_path"] = config["_main_project_layout"]["model_name_or_path"]
     config = resolve_config_paths(config, {"data": ["pairs_path"], "output": ["dir"]})
     metrics = train_ranker(config)
     print(metrics)

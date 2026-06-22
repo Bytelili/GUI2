@@ -4,9 +4,11 @@ import argparse
 from pathlib import Path
 
 from tn_dpo_gui.data.action_schema import Action
+from tn_dpo_gui.data.main_project_adapter import convert_main_project_artifacts
 from tn_dpo_gui.data.dataset import load_step_examples, load_trajectory_records, save_step_examples, save_trajectory_records
 from tn_dpo_gui.data.schema import GUIStepExample, TrajectoryRecord
 from tn_dpo_gui.utils.io import ensure_dir, read_json, read_jsonl
+from tn_dpo_gui.utils.main_project import derive_tn_dpo_layout, validate_integration_inputs
 
 from . import PROJECT_ROOT, resolve_path
 
@@ -180,34 +182,74 @@ def _load_json_or_jsonl(path: Path) -> list[dict]:
     return read_jsonl(path)
 
 
-def preprocess(output_dir: Path, raw_steps: Path | None = None, raw_trajectories: Path | None = None, demo: bool = False) -> dict[str, str]:
+def preprocess(
+    output_dir: Path,
+    raw_steps: Path | None = None,
+    raw_trajectories: Path | None = None,
+    demo: bool = False,
+    root_config: Path | None = None,
+) -> dict[str, str]:
     ensure_dir(output_dir)
-    if demo or raw_steps is None or raw_trajectories is None:
+    if demo:
         examples, trajectories = _demo_examples()
-    else:
+        summary = {"mode": "demo", "examples": len(examples), "trajectories": len(trajectories)}
+    elif raw_steps is None and raw_trajectories is None:
+        layout = derive_tn_dpo_layout(root_config)
+        validate_integration_inputs(layout)
+        examples, trajectories, summary = convert_main_project_artifacts(
+            layout["train_tasks_path"],
+            layout["eval_tasks_path"],
+            layout["papo_steps_path"],
+        )
+        summary = {
+            **summary,
+            "mode": "main_project",
+            "root_config_path": str(layout["root_config_path"]),
+            "task_dir": str(layout["task_dir"]),
+            "work_dir": str(layout["work_dir"]),
+            "model_name_or_path": str(layout["model_name_or_path"]),
+        }
+    elif raw_steps is not None and raw_trajectories is not None:
         examples = [GUIStepExample.from_dict(item) for item in _load_json_or_jsonl(raw_steps)]
         trajectories = [TrajectoryRecord.from_dict(item) for item in _load_json_or_jsonl(raw_trajectories)]
+        summary = {"mode": "custom", "examples": len(examples), "trajectories": len(trajectories)}
+    else:
+        raise ValueError("Provide both --raw-steps and --raw-trajectories, or provide neither to use main-project mode.")
 
     step_path = output_dir / "steps.jsonl"
     trajectory_path = output_dir / "trajectories.jsonl"
+    summary_path = output_dir / "summary.json"
     save_step_examples(step_path, examples)
     save_trajectory_records(trajectory_path, trajectories)
-    return {"steps_path": str(step_path), "trajectories_path": str(trajectory_path)}
+    from tn_dpo_gui.utils.io import write_json
+
+    write_json(summary_path, summary)
+    return {"steps_path": str(step_path), "trajectories_path": str(trajectory_path), "summary_path": str(summary_path)}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Normalize GUI-step and trajectory data for TN-DPO.")
-    parser.add_argument("--output-dir", default="data/demo")
+    parser.add_argument("--output-dir", default="")
     parser.add_argument("--raw-steps")
     parser.add_argument("--raw-trajectories")
     parser.add_argument("--demo", action="store_true")
+    parser.add_argument("--root-config", default=str(PROJECT_ROOT.parent / "config.yaml"))
     args = parser.parse_args()
 
+    root_config_path = resolve_path(args.root_config) if args.root_config else None
+    if args.output_dir:
+        output_dir = resolve_path(args.output_dir)
+    elif args.demo:
+        output_dir = resolve_path("data/demo")
+    else:
+        output_dir = derive_tn_dpo_layout(root_config_path)["processed_dir"]
+
     output = preprocess(
-        resolve_path(args.output_dir),
+        output_dir,
         raw_steps=resolve_path(args.raw_steps) if args.raw_steps else None,
         raw_trajectories=resolve_path(args.raw_trajectories) if args.raw_trajectories else None,
-        demo=args.demo or (args.raw_steps is None and args.raw_trajectories is None),
+        demo=args.demo,
+        root_config=root_config_path,
     )
     print(output)
 

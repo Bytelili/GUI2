@@ -10,7 +10,7 @@ from tn_dpo_gui.retrieval.user_history_index import UserHistoryIndex
 from tn_dpo_gui.utils.config import load_config
 from tn_dpo_gui.utils.io import write_json, write_jsonl
 
-from . import PROJECT_ROOT, resolve_config_paths
+from . import PROJECT_ROOT, apply_main_project_layout, resolve_config_paths
 
 
 def main() -> None:
@@ -19,6 +19,20 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
+    config = apply_main_project_layout(
+        config,
+        {
+            "input": {
+                "steps_path": "steps_path",
+                "trajectories_path": "trajectories_path",
+                "history_index_path": "user_index_path",
+            },
+            "output": {
+                "pairs_path": "pairs_path",
+                "summary_path": "pair_summary_path",
+            },
+        },
+    )
     config = resolve_config_paths(
         config,
         {
@@ -48,6 +62,8 @@ def main() -> None:
         "avg_weight": sum(pair.weight for pair in pairs) / max(len(pairs), 1),
         "avg_gate_capacity": sum(pair.gate_capacity for pair in pairs) / max(len(pairs), 1),
     }
+    if config.get("_main_project_layout"):
+        summary["main_project_layout"] = config["_main_project_layout"]
     write_json(config["output"]["summary_path"], summary)
     print(summary)
 

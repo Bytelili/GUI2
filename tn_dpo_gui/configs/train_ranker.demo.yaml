@@ -1,11 +1,7 @@
-main_project:
-  enabled: true
-  root_config: ../config.yaml
-
 seed: 7
 
 data:
-  pairs_path: auto
+  pairs_path: artifacts/pairs/pairs.jsonl
 
 encoder:
   dim: 256
@@ -20,7 +16,6 @@ training:
   batch_size: 8
   lr: 0.001
   beta: 1.0
-  base_model_path: ""
 
 output:
-  dir: auto
+  dir: artifacts/ranker
