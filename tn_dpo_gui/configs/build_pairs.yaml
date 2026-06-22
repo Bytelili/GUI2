@@ -1,0 +1,25 @@
+input:
+  steps_path: data/demo/steps.jsonl
+  trajectories_path: data/demo/trajectories.jsonl
+  history_index_path: data/demo/user_index.json
+
+output:
+  pairs_path: artifacts/pairs/pairs.jsonl
+  summary_path: artifacts/pairs/summary.json
+
+encoder:
+  dim: 256
+  backend: hashing
+
+pair_builder:
+  history_limit: 5
+  continuation_limit: 4
+  max_candidates: 8
+  gamma: 0.75
+  lambda_u: 0.35
+  tau_omega: 0.25
+  min_null_margin: 0.01
+  allowed_history_splits:
+    - train
+    - history
+  fallback_current_future: true
