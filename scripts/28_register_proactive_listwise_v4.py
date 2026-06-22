@@ -36,6 +36,16 @@ def main() -> None:
         if not destination.exists():
             shutil.copy2(source, destination)
             copied.append(str(destination.resolve()))
+    for name in ["listwise_v4_manifest.json", "listwise_v4_quality_report.json", "SHA256SUMS.txt"]:
+        source = args.release_dir / name
+        if not source.exists():
+            continue
+        destination = args.dataset_dir / name
+        if destination.exists() and sha256_file(destination) != sha256_file(source):
+            raise SystemExit(f"RELEASE REGISTRATION FAILED: refusing to overwrite different release metadata: {destination}")
+        if not destination.exists():
+            shutil.copy2(source, destination)
+            copied.append(str(destination.resolve()))
     fragment = json.loads((args.release_dir / "dataset_info_v4.json").read_text(encoding="utf-8"))
     dataset_info_path = args.dataset_dir / "dataset_info.json"
     dataset_info = json.loads(dataset_info_path.read_text(encoding="utf-8")) if dataset_info_path.exists() else {}
@@ -49,6 +59,7 @@ def main() -> None:
         "release_status": manifest.get("release_status"),
         "copied": copied,
         "dataset_info": str(dataset_info_path.resolve()),
+        "registered_manifest": str((args.dataset_dir / "listwise_v4_manifest.json").resolve()),
         "v2_v3_entries_preserved": True,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))

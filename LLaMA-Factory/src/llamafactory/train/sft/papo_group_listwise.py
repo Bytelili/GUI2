@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 from typing import Union
 
 import torch
@@ -7,6 +10,57 @@ import torch.nn.functional as F
 
 
 IGNORE_INDEX = -100
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_papo_group_dataset_binding(
+    manifest_path: str,
+    dataset_root: str,
+    *,
+    allow_nonformal_smoke: bool = False,
+) -> dict:
+    manifest_file, root = Path(manifest_path), Path(dataset_root)
+    if not manifest_file.is_file():
+        raise ValueError(f"PAPO Listwise-v4 manifest does not exist: {manifest_file}")
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8", errors="strict"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"Cannot read PAPO Listwise-v4 manifest: {manifest_file}: {error}") from error
+
+    release_status = manifest.get("release_status")
+    is_formal = release_status == "formal_candidate_release"
+    is_engineering_smoke = (
+        allow_nonformal_smoke
+        and manifest.get("release_kind") == "smoke_v4"
+        and release_status == "synthetic_smoke_not_for_formal_training"
+        and manifest.get("formal_full_v4_complete") is False
+    )
+    if not is_formal and not is_engineering_smoke:
+        raise ValueError(
+            "PAPO grouped training refuses this release. Non-formal engineering smoke requires "
+            "`papo_allow_nonformal_smoke: true` and an unchanged smoke-only manifest."
+        )
+
+    hashes = manifest.get("dataset_hashes")
+    if not isinstance(hashes, dict) or not hashes:
+        raise ValueError("PAPO Listwise-v4 manifest has no dataset hash bindings.")
+    for filename, expected in hashes.items():
+        dataset_file = root / filename
+        if not dataset_file.is_file():
+            raise ValueError(f"PAPO Listwise-v4 registered dataset is missing: {dataset_file}")
+        actual = _sha256_file(dataset_file)
+        if actual != expected:
+            raise ValueError(
+                f"PAPO Listwise-v4 dataset SHA256 mismatch: {filename}: expected={expected}, actual={actual}"
+            )
+    return manifest
 
 
 def papo_listwise_loss(logits: torch.Tensor, labels: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:

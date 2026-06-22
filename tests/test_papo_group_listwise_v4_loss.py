@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -32,6 +35,7 @@ if torch is not None:
     )
     papo_group_listwise_loss = loss_module.papo_group_listwise_loss
     papo_listwise_loss = loss_module.papo_listwise_loss
+    verify_papo_group_dataset_binding = loss_module.verify_papo_group_dataset_binding
 
 
 def _batch(candidate_logits: list[float], lengths: list[int] | None = None):
@@ -155,6 +159,53 @@ class GroupListwiseLossTest(unittest.TestCase):
         logits, labels = _batch([1.0, 0.0])
         loss = papo_listwise_loss(logits, labels, torch.tensor([0.8, 0.2]))
         self.assertTrue(torch.isfinite(loss))
+
+    def test_nonformal_smoke_requires_explicit_unchanged_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            dataset = root / "train.json"
+            dataset.write_text("[]", encoding="utf-8")
+            digest = hashlib.sha256(dataset.read_bytes()).hexdigest()
+            manifest = root / "manifest.json"
+            payload = {
+                "release_kind": "smoke_v4",
+                "release_status": "synthetic_smoke_not_for_formal_training",
+                "formal_full_v4_complete": False,
+                "dataset_hashes": {"train.json": digest},
+            }
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "refuses this release"):
+                verify_papo_group_dataset_binding(str(manifest), str(root))
+            accepted = verify_papo_group_dataset_binding(
+                str(manifest), str(root), allow_nonformal_smoke=True
+            )
+            self.assertEqual(accepted["release_status"], "synthetic_smoke_not_for_formal_training")
+
+            payload["formal_full_v4_complete"] = True
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "refuses this release"):
+                verify_papo_group_dataset_binding(str(manifest), str(root), allow_nonformal_smoke=True)
+
+    def test_nonformal_smoke_still_enforces_dataset_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            dataset = root / "train.json"
+            dataset.write_text("[]", encoding="utf-8")
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "release_kind": "smoke_v4",
+                        "release_status": "synthetic_smoke_not_for_formal_training",
+                        "formal_full_v4_complete": False,
+                        "dataset_hashes": {"train.json": "0" * 64},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
+                verify_papo_group_dataset_binding(str(manifest), str(root), allow_nonformal_smoke=True)
 
 
 if __name__ == "__main__":

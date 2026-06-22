@@ -528,6 +528,15 @@ class FinetuningArguments(
         default=None,
         metadata={"help": "Directory containing the registered Listwise-v4 dataset files."},
     )
+    papo_allow_nonformal_smoke: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Allow an explicitly labeled retrieval-only smoke release for engineering checks. "
+                "This never permits formal-v4 claims."
+            )
+        },
+    )
     use_asft_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the ASFT loss."},
@@ -592,6 +601,8 @@ class FinetuningArguments(
             raise ValueError("`papo_group_model_temperature` must be positive.")
         if self.use_papo_group_listwise and (not self.papo_dataset_manifest or not self.papo_dataset_root):
             raise ValueError("Grouped PAPO Listwise-v4 requires `papo_dataset_manifest` and `papo_dataset_root`.")
+        if self.papo_allow_nonformal_smoke and not self.use_papo_group_listwise:
+            raise ValueError("`papo_allow_nonformal_smoke` is only valid with grouped PAPO Listwise-v4.")
         self.lora_target: list[str] = split_arg(self.lora_target)
         self.oft_target: list[str] = split_arg(self.oft_target)
         self.additional_target: list[str] | None = split_arg(self.additional_target)

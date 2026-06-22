@@ -15,11 +15,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import hashlib
 import json
 import os
 from functools import partial
-from pathlib import Path
 from types import MethodType
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -33,7 +31,7 @@ from ...extras.constants import IGNORE_INDEX
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
-from .papo_group_listwise import papo_group_listwise_loss, papo_listwise_loss
+from .papo_group_listwise import papo_group_listwise_loss, papo_listwise_loss, verify_papo_group_dataset_binding
 
 
 if TYPE_CHECKING:
@@ -45,36 +43,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.get_logger(__name__)
-
-
-def _sha256_file(path: "Path") -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def verify_papo_group_dataset_binding(manifest_path: str, dataset_root: str) -> None:
-    manifest_file, root = Path(manifest_path), Path(dataset_root)
-    if not manifest_file.is_file():
-        raise ValueError(f"PAPO Listwise-v4 manifest does not exist: {manifest_file}")
-    try:
-        manifest = json.loads(manifest_file.read_text(encoding="utf-8", errors="strict"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValueError(f"Cannot read PAPO Listwise-v4 manifest: {manifest_file}: {error}") from error
-    if manifest.get("release_status") != "formal_candidate_release":
-        raise ValueError("PAPO grouped training refuses synthetic or non-formal release manifests.")
-    hashes = manifest.get("dataset_hashes")
-    if not isinstance(hashes, dict) or not hashes:
-        raise ValueError("PAPO Listwise-v4 manifest has no dataset hash bindings.")
-    for filename, expected in hashes.items():
-        dataset_file = root / filename
-        if not dataset_file.is_file():
-            raise ValueError(f"PAPO Listwise-v4 registered dataset is missing: {dataset_file}")
-        actual = _sha256_file(dataset_file)
-        if actual != expected:
-            raise ValueError(f"PAPO Listwise-v4 dataset SHA256 mismatch: {filename}: expected={expected}, actual={actual}")
 
 
 class CustomSeq2SeqTrainer(Seq2SeqTrainer):
@@ -105,10 +73,17 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
 
         self.finetuning_args = finetuning_args
         if finetuning_args.use_papo_group_listwise:
-            verify_papo_group_dataset_binding(
+            self._papo_train_metric_sums = {}
+            self._papo_train_group_count = 0
+            manifest = verify_papo_group_dataset_binding(
                 finetuning_args.papo_dataset_manifest,
                 finetuning_args.papo_dataset_root,
+                allow_nonformal_smoke=finetuning_args.papo_allow_nonformal_smoke,
             )
+            if manifest.get("release_status") != "formal_candidate_release":
+                logger.warning_rank0(
+                    "PAPO RETRIEVAL-ONLY SMOKE: this run is engineering-only and cannot support full-v4 claims."
+                )
         if gen_kwargs is not None:
             # https://github.com/huggingface/transformers/blob/v4.45.0/src/transformers/trainer_seq2seq.py#L287
             self._gen_kwargs = gen_kwargs
@@ -205,12 +180,20 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 model_temperature=self.finetuning_args.papo_group_model_temperature,
                 return_metrics=True,
             )
-            logging_steps = max(1, int(self.args.logging_steps))
-            if model.training and self.state.global_step % logging_steps == 0:
-                last_step = getattr(self, "_last_papo_group_log_step", None)
-                if last_step != self.state.global_step:
-                    self._last_papo_group_log_step = self.state.global_step
-                    self.log({f"papo_{name}": value.item() for name, value in metrics.items()})
+            if model.training:
+                group_count = int(torch.unique(group_index).numel())
+                for name, value in metrics.items():
+                    self._papo_train_metric_sums[name] = self._papo_train_metric_sums.get(name, 0.0) + (
+                        float(value.item()) * group_count
+                    )
+                self._papo_train_group_count += group_count
+            elif getattr(self, "_collect_papo_eval_metrics", False):
+                group_count = int(torch.unique(group_index).numel())
+                for name, value in metrics.items():
+                    self._papo_eval_metric_sums[name] = self._papo_eval_metric_sums.get(name, 0.0) + (
+                        float(value.item()) * group_count
+                    )
+                self._papo_eval_group_count += group_count
             return (loss, outputs) if kwargs.get("return_outputs", False) else loss
         elif self.finetuning_args.use_papo_listwise:
             if listwise_weight is None:
@@ -230,6 +213,52 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             return self.compute_loss_func(outputs, inputs["labels"], ref_logits)
         else:
             return super().compute_loss(model, inputs, *args, **kwargs)
+
+    @override
+    def log(self, logs: dict[str, float], *args, **kwargs) -> None:
+        if (
+            getattr(getattr(self, "finetuning_args", None), "use_papo_group_listwise", False)
+            and "loss" in logs
+            and "eval_loss" not in logs
+            and self._papo_train_group_count > 0
+        ):
+            names = ["group_loss", "oracle_top1_accuracy", "oracle_margin", "target_entropy", "policy_entropy"]
+            values = [self._papo_train_metric_sums.get(name, 0.0) for name in names] + [
+                self._papo_train_group_count
+            ]
+            totals = torch.tensor(values, dtype=torch.float64, device=self.args.device)
+            totals = self.accelerator.reduce(totals, reduction="sum")
+            count = max(float(totals[-1].item()), 1.0)
+            logs.update(
+                {f"papo_{name}": float(totals[index].item()) / count for index, name in enumerate(names)}
+            )
+            self._papo_train_metric_sums = {}
+            self._papo_train_group_count = 0
+        return super().log(logs, *args, **kwargs)
+
+    @override
+    def evaluation_loop(self, *args, **kwargs):
+        if not self.finetuning_args.use_papo_group_listwise:
+            return super().evaluation_loop(*args, **kwargs)
+
+        self._papo_eval_metric_sums = {}
+        self._papo_eval_group_count = 0
+        self._collect_papo_eval_metrics = True
+        try:
+            output = super().evaluation_loop(*args, **kwargs)
+        finally:
+            self._collect_papo_eval_metrics = False
+
+        names = ["group_loss", "oracle_top1_accuracy", "oracle_margin", "target_entropy", "policy_entropy"]
+        values = [self._papo_eval_metric_sums.get(name, 0.0) for name in names] + [self._papo_eval_group_count]
+        totals = torch.tensor(values, dtype=torch.float64, device=self.args.device)
+        totals = self.accelerator.reduce(totals, reduction="sum")
+        count = max(float(totals[-1].item()), 1.0)
+        prefix = kwargs.get("metric_key_prefix", "eval")
+        output.metrics.update(
+            {f"{prefix}_papo_{name}": float(totals[index].item()) / count for index, name in enumerate(names)}
+        )
+        return output
 
     @override
     def prediction_step(
