@@ -128,8 +128,14 @@ def papo_group_listwise_loss(
         if int(mask.sum()) < 2:
             raise ValueError("Every PAPO Listwise group must contain at least two candidates.")
         q = target_probability[mask]
-        if not torch.isclose(q.sum(), q.new_tensor(1.0), atol=1e-5, rtol=1e-5):
-            raise ValueError("PAPO target probabilities must sum to one inside every group.")
+        group_sum = q.sum()
+        if not torch.isfinite(group_sum) or group_sum <= 0:
+            raise ValueError("PAPO target probabilities must sum to a positive finite value inside every group.")
+        if not torch.isclose(group_sum, q.new_tensor(1.0), atol=1e-5, rtol=1e-5):
+            if torch.isclose(group_sum, q.new_tensor(1.0), atol=5e-3, rtol=5e-3):
+                q = q / group_sum
+            else:
+                raise ValueError("PAPO target probabilities must sum to one inside every group.")
         group_oracle = oracle_mask[mask]
         if int(group_oracle.sum()) != 1:
             raise ValueError("Every PAPO Listwise group must contain exactly one oracle.")

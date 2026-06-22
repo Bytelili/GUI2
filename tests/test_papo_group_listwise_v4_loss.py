@@ -124,6 +124,17 @@ class GroupListwiseLossTest(unittest.TestCase):
                 logits, labels, torch.tensor([0, 0]), torch.tensor([0.4, 0.6]), torch.tensor([True, False])
             )
 
+    def test_small_probability_rounding_error_is_renormalized(self) -> None:
+        logits, labels = _batch([1.0, 0.0, -0.5])
+        loss = papo_group_listwise_loss(
+            logits,
+            labels,
+            torch.tensor([0, 0, 0]),
+            torch.tensor([0.9, 0.1, 0.0], dtype=torch.bfloat16),
+            torch.tensor([True, False, False]),
+        )
+        self.assertTrue(torch.isfinite(loss))
+
     def test_collator_flatten_keeps_complete_variable_groups(self) -> None:
         features = [
             {

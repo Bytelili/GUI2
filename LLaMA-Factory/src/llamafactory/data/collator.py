@@ -550,8 +550,12 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
 
             features["attention_mask"] = None  # let transformers handle causal packed mask.
 
-        for key, value in features.items():  # cast data dtype for paligemma
+        metadata_float_keys = {"listwise_weight", "papo_target_probability"}
+        for key, value in features.items():  # cast model inputs dtype for paligemma
             if torch.is_tensor(value) and torch.is_floating_point(value):
+                if key in metadata_float_keys:
+                    features[key] = value.to(torch.float32)
+                    continue
                 features[key] = value.to(self.compute_dtype)
 
         return features
