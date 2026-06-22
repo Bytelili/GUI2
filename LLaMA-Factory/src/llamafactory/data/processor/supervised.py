@@ -49,6 +49,13 @@ class PackingParams:
 
 @dataclass
 class SupervisedDatasetProcessor(DatasetProcessor):
+    def _safe_decode(self, token_ids: list[int]) -> str:
+        try:
+            return self.tokenizer.decode([int(token_id) for token_id in token_ids], skip_special_tokens=False)
+        except Exception as exc:
+            preview = [int(token_id) for token_id in token_ids[:32]]
+            return f"<decode skipped: {type(exc).__name__}: {exc}; token_preview={preview}>"
+
     def _encode_data_example(
         self,
         prompt: list[dict[str, str]],
@@ -169,11 +176,28 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         return model_inputs
 
     def print_data_example(self, example: dict[str, list[int]]) -> None:
-        valid_labels = list(filter(lambda x: x != IGNORE_INDEX, example["labels"]))
-        print("input_ids:\n{}".format(example["input_ids"]))
-        print("inputs:\n{}".format(self.tokenizer.decode(example["input_ids"], skip_special_tokens=False)))
-        print("label_ids:\n{}".format(example["labels"]))
-        print(f"labels:\n{self.tokenizer.decode(valid_labels, skip_special_tokens=False)}")
+        input_ids = example["input_ids"]
+        labels = example["labels"]
+        if input_ids and isinstance(input_ids[0], list):
+            first_input_ids = input_ids[0]
+            first_labels = labels[0]
+            valid_labels = [token_id for token_id in first_labels if token_id != IGNORE_INDEX]
+            print("papo_group_size:\n{}".format(len(input_ids)))
+            print("input_ids[0]:\n{}".format(first_input_ids))
+            print("inputs[0]:\n{}".format(self._safe_decode(first_input_ids)))
+            print("label_ids[0]:\n{}".format(first_labels))
+            print("labels[0]:\n{}".format(self._safe_decode(valid_labels)))
+            if "papo_group_target" in example:
+                print("papo_group_target:\n{}".format(example["papo_group_target"]))
+            if "papo_group_oracle_index" in example:
+                print("papo_group_oracle_index:\n{}".format(example["papo_group_oracle_index"]))
+            return
+
+        valid_labels = [token_id for token_id in labels if token_id != IGNORE_INDEX]
+        print("input_ids:\n{}".format(input_ids))
+        print("inputs:\n{}".format(self._safe_decode(input_ids)))
+        print("label_ids:\n{}".format(labels))
+        print("labels:\n{}".format(self._safe_decode(valid_labels)))
 
 
 @dataclass
