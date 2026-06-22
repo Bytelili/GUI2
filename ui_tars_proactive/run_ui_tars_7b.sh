@@ -251,6 +251,14 @@ case "$ACTION" in
     evaluate_model "$EVAL_MODEL_LABEL" "$EVAL_ADAPTER"
     summarize_adapter
     ;;
+  eval_model)
+    if [[ -z "$EVAL_MODEL_LABEL" ]]; then
+      echo "EVAL_MODEL_LABEL is required for eval_model." >&2
+      exit 2
+    fi
+    evaluate_model "$EVAL_MODEL_LABEL" "$EVAL_ADAPTER"
+    summarize_adapter
+    ;;
   eval_all)
     evaluate_model ui_tars_7b_base ""
     evaluate_model ui_tars_7b_sft "$SFT_ADAPTER"
@@ -266,7 +274,7 @@ case "$ACTION" in
     summarize
     ;;
   *)
-    echo "Usage: bash ui_tars_proactive/run_ui_tars_7b.sh {audit|render_sft_config|train_sft|eval_base|eval_sft|eval_adapter|eval_all|full|summary}" >&2
+    echo "Usage: bash ui_tars_proactive/run_ui_tars_7b.sh {audit|render_sft_config|train_sft|eval_base|eval_sft|eval_adapter|eval_model|eval_all|full|summary}" >&2
     exit 2
     ;;
 esac
