@@ -26,6 +26,73 @@ from papo.proactive_listwise_v4 import (  # noqa: E402
 from papo.proactive_quality_gate_v4 import audit_v4_groups, write_quality_outputs  # noqa: E402
 
 
+def _has_safe_smoke_candidate(row: dict) -> bool:
+    candidates = row.get("candidates") or {}
+    return bool(
+        candidates.get("same_user_similar_intent")
+        or candidates.get("same_user_similar_context_different_intent")
+    )
+
+
+def _build_retrieval_rows(
+    tasks: list[dict],
+    references: list[dict],
+    split: str,
+    args: argparse.Namespace,
+) -> list[dict]:
+    return build_retrieval_candidate_pools(
+        tasks,
+        references,
+        split=split,
+        min_same_user_similarity=args.min_same_user_similarity,
+        positive_same_user_similarity=args.positive_same_user_similarity,
+        max_context_similarity=args.max_context_similarity,
+        max_global_text_frequency=args.max_global_candidate_frequency,
+    )
+
+
+def _safe_smoke_sample(
+    all_tasks: list[dict],
+    references: list[dict],
+    *,
+    split: str,
+    limit: int,
+    seed: int,
+    args: argparse.Namespace,
+) -> tuple[list[dict], list[dict], list[str]]:
+    selected = stratified_tasks(all_tasks, limit, seed)
+    rows = _build_retrieval_rows(selected, references, split, args)
+    safe_pairs = [(task, row) for task, row in zip(selected, rows) if _has_safe_smoke_candidate(row)]
+    excluded = [str(task.get("task_id") or "") for task, row in zip(selected, rows) if not _has_safe_smoke_candidate(row)]
+    missing = len(selected) - len(safe_pairs)
+    if missing:
+        selected_ids = {str(task.get("task_id") or "") for task in selected}
+        window = min(len(all_tasks) - 1, limit + max(500, missing * 20))
+        replacement_order = stratified_tasks(all_tasks, window, seed)
+        replacement_tasks = [
+            task for task in replacement_order if str(task.get("task_id") or "") not in selected_ids
+        ]
+        replacement_rows = _build_retrieval_rows(replacement_tasks, references, split, args)
+        safe_pairs.extend(
+            (task, row)
+            for task, row in zip(replacement_tasks, replacement_rows)
+            if _has_safe_smoke_candidate(row)
+        )
+    if len(safe_pairs) < len(selected):
+        raise V4ValidationError(
+            f"Unable to find {len(selected)} safe retrieval-backed {split} smoke tasks; "
+            f"found {len(safe_pairs)}. No placeholder candidate was generated."
+        )
+    final_tasks = [task for task, _ in safe_pairs[: len(selected)]]
+    final_rows = _build_retrieval_rows(final_tasks, references, split, args)
+    unsafe_after_cap = [row["task_id"] for row in final_rows if not _has_safe_smoke_candidate(row)]
+    if unsafe_after_cap:
+        raise V4ValidationError(
+            f"Safe smoke candidates were removed by the global frequency cap: {unsafe_after_cap[:10]}"
+        )
+    return final_tasks, final_rows, excluded
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build isolated PAPO grouped Listwise-v4 smoke or formal release.")
     parser.add_argument("--train-tasks", type=Path, required=True)
@@ -68,26 +135,28 @@ def main() -> None:
 
         all_train_tasks = read_jsonl(args.train_tasks)
         all_eval_tasks = read_jsonl(args.eval_tasks)
-        train_tasks = stratified_tasks(all_train_tasks, args.train_limit if args.release_kind == "smoke_v4" else 0, args.seed)
-        eval_tasks = stratified_tasks(all_eval_tasks, args.eval_limit if args.release_kind == "smoke_v4" else 0, args.seed + 1)
-        train_pool_rows = build_retrieval_candidate_pools(
-            train_tasks,
-            all_train_tasks,
-            split="train",
-            min_same_user_similarity=args.min_same_user_similarity,
-            positive_same_user_similarity=args.positive_same_user_similarity,
-            max_context_similarity=args.max_context_similarity,
-            max_global_text_frequency=args.max_global_candidate_frequency,
-        )
-        eval_pool_rows = build_retrieval_candidate_pools(
-            eval_tasks,
-            all_train_tasks,
-            split="eval",
-            min_same_user_similarity=args.min_same_user_similarity,
-            positive_same_user_similarity=args.positive_same_user_similarity,
-            max_context_similarity=args.max_context_similarity,
-            max_global_text_frequency=args.max_global_candidate_frequency,
-        )
+        smoke_exclusions = {"train": [], "eval": []}
+        if args.release_kind == "smoke_v4":
+            train_tasks, train_pool_rows, smoke_exclusions["train"] = _safe_smoke_sample(
+                all_train_tasks,
+                all_train_tasks,
+                split="train",
+                limit=args.train_limit,
+                seed=args.seed,
+                args=args,
+            )
+            eval_tasks, eval_pool_rows, smoke_exclusions["eval"] = _safe_smoke_sample(
+                all_eval_tasks,
+                all_train_tasks,
+                split="eval",
+                limit=args.eval_limit,
+                seed=args.seed + 1,
+                args=args,
+            )
+        else:
+            train_tasks, eval_tasks = all_train_tasks, all_eval_tasks
+            train_pool_rows = _build_retrieval_rows(train_tasks, all_train_tasks, "train", args)
+            eval_pool_rows = _build_retrieval_rows(eval_tasks, all_train_tasks, "eval", args)
         train_retrieval = retrieval_pool_map(train_pool_rows)
         eval_retrieval = retrieval_pool_map(eval_pool_rows)
         train_map = eval_map = None
@@ -131,6 +200,16 @@ def main() -> None:
         write_jsonl(intermediate / "retrieval_candidate_pool_eval_selected_v4.jsonl", eval_pool_rows)
         write_json(intermediate / "papo_proactive_train_listwise_v4.groups.json", train_groups)
         write_json(intermediate / "papo_proactive_eval_listwise_v4.groups.json", eval_groups)
+        if args.release_kind == "smoke_v4":
+            write_json(
+                args.workspace / "reports" / "smoke_safe_candidate_selection_v4.json",
+                {
+                    "policy": "retrieval-backed candidates only; placeholder intent generation forbidden",
+                    "source_tasks_deleted": False,
+                    "excluded_from_smoke_sample": smoke_exclusions,
+                    "selected_group_counts": {"train": len(train_tasks), "eval": len(eval_tasks)},
+                },
+            )
         quality, issues = audit_v4_groups(
             train_groups,
             eval_groups,

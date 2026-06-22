@@ -70,6 +70,13 @@ def _task(task_id: str, split: str, user: str, stamp: str, image: Path, target: 
     }
 
 
+def _model_candidates(tasks: list[dict]) -> dict[str, list[str]]:
+    return {
+        str(task["task_id"]): [f"打开设置，查看网络状态{index}"]
+        for index, task in enumerate(tasks)
+    }
+
+
 class ProactiveListwiseV4PipelineTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -286,12 +293,46 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
         by_source = {item["source"]: index for index, item in enumerate(groups[0]["candidates"])}
         weak_index = by_source["same_user_similar_intent"]
         self.assertEqual(groups[0]["target_distribution"][weak_index], 0.0)
-        self.assertIn("synthetic_smoke", by_source)
+        self.assertNotIn("synthetic_smoke", by_source)
+        self.assertEqual(groups[0]["target_distribution"][groups[0]["oracle_index"]], 1.0)
+
+    def test_smoke_keeps_unreviewed_cross_user_candidate_outside_group(self) -> None:
+        target = _task("cross-target", "train", "u1", "20260210_100000", self.image, "打开百度搜索母亲节日期")
+        target["target"]["intent_class"] = "信息查询"
+        cross = _task("cross-source", "train", "u2", "20260201_090000", self.image, "打开夸克搜索甲状腺素作用")
+        cross["target"]["intent_class"] = "信息查询"
+        rows = build_retrieval_candidate_pools([target], [target, cross], split="train")
+        self.assertEqual(len(rows[0]["candidates"]["cross_user_similar_intent"]), 1)
+        with self.assertRaisesRegex(V4ValidationError, "no safe retrieved non-oracle candidate"):
+            build_groups(
+                [target],
+                split="train",
+                model_candidates=None,
+                retrieval_candidates=retrieval_pool_map(rows),
+                synthetic_smoke=True,
+            )
+
+    def test_quality_gate_blocks_workflow_language_as_candidate(self) -> None:
+        task = self.train_tasks[0]
+        group = build_groups(
+            [task],
+            split="train",
+            model_candidates={task["task_id"]: ["先询问用户是否需要打开闹钟"]},
+            synthetic_smoke=True,
+        )[0]
+        quality, issues = audit_v4_groups([group], [])
+        self.assertEqual(quality["status"], "failed")
+        self.assertIn("non_intent_workflow_phrase", {issue.category for issue in issues})
 
     def test_history_recurrence_metadata_and_normalized_duplicate_gate(self) -> None:
         repeated = _task("repeated", "train", "u1", "20260210_100000", self.image, "打开微信，蓝牙开锁")
         repeated["input"]["previous_intents"][0]["intent"] = "打开微信蓝牙开锁！"
-        group = build_groups([repeated], split="train", model_candidates=None, synthetic_smoke=True)[0]
+        group = build_groups(
+            [repeated],
+            split="train",
+            model_candidates=_model_candidates([repeated]),
+            synthetic_smoke=True,
+        )[0]
         recurrence = group["metadata"]["target_history_recurrence"]
         self.assertTrue(recurrence["normalized_exact"])
         self.assertEqual(recurrence["exact_match_count"], 1)
@@ -307,8 +348,18 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
 
     def test_manual_review_schema_gate_release_and_hashes(self) -> None:
         source_manifest = audit_source_tasks(self.train_path, self.eval_path, self.workspace)
-        train = build_groups(self.train_tasks, split="train", model_candidates=None, synthetic_smoke=True)
-        evaluation = build_groups(self.eval_tasks, split="eval", model_candidates=None, synthetic_smoke=True)
+        train = build_groups(
+            self.train_tasks,
+            split="train",
+            model_candidates=_model_candidates(self.train_tasks),
+            synthetic_smoke=True,
+        )
+        evaluation = build_groups(
+            self.eval_tasks,
+            split="eval",
+            model_candidates=_model_candidates(self.eval_tasks),
+            synthetic_smoke=True,
+        )
         quality, issues = audit_v4_groups(train, evaluation, source_manifest=source_manifest)
         self.assertEqual(quality["status"], "passed")
         self.assertFalse(issues)
@@ -385,9 +436,19 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
             )
 
     def test_quality_gate_detects_train_eval_target_leakage(self) -> None:
-        train = build_groups([self.train_tasks[0]], split="train", model_candidates=None, synthetic_smoke=True)
+        train = build_groups(
+            [self.train_tasks[0]],
+            split="train",
+            model_candidates=_model_candidates([self.train_tasks[0]]),
+            synthetic_smoke=True,
+        )
         leaked_task = _task("eval-leak", "eval", "u1", "20260201_100000", self.image, "打开闹钟设置十点提醒")
-        evaluation = build_groups([leaked_task], split="eval", model_candidates=None, synthetic_smoke=True)
+        evaluation = build_groups(
+            [leaked_task],
+            split="eval",
+            model_candidates=_model_candidates([leaked_task]),
+            synthetic_smoke=True,
+        )
         quality, _ = audit_v4_groups(train, evaluation)
         self.assertEqual(quality["status"], "failed")
         self.assertEqual(quality["train_eval_target_overlap_count"], 1)
@@ -401,7 +462,12 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
         schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" / "papo_listwise_v4.schema.json").read_text())
         self.assertEqual(schema["properties"]["messages"]["items"]["properties"]["role"]["enum"], ["system", "user", "observation"])
         if jsonschema is not None:
-            group = build_groups([self.train_tasks[0]], split="train", model_candidates=None, synthetic_smoke=True)[0]
+            group = build_groups(
+                [self.train_tasks[0]],
+                split="train",
+                model_candidates=_model_candidates([self.train_tasks[0]]),
+                synthetic_smoke=True,
+            )[0]
             jsonschema.validate(group, schema)
 
 

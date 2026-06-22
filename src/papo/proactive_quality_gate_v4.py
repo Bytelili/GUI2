@@ -16,6 +16,14 @@ from .proactive_listwise_v4 import (
     write_json,
 )
 
+NON_INTENT_WORKFLOW_MARKERS = (
+    "先询问用户",
+    "询问用户是否",
+    "是否需要打开",
+    "请用户确认",
+    "请确认是否",
+)
+
 
 @dataclass(frozen=True)
 class V4Issue:
@@ -70,6 +78,7 @@ def audit_v4_groups(
     margins: list[float] = []
     reviewed = 0
     candidate_total = 0
+    non_intent_workflow_phrase_count = 0
     unavailable_image_count = 0
     cross_user_rejected_count = 0
     cross_user_analysis_count = 0
@@ -240,10 +249,27 @@ def audit_v4_groups(
                 texts.add(key)
                 if any(marker in text.upper() for marker in ("ERROR", "�")):
                     add("block", "invalid_candidate_text", split, group_id, text, candidate_id)
+                if any(marker in text for marker in NON_INTENT_WORKFLOW_MARKERS):
+                    non_intent_workflow_phrase_count += 1
+                    add(
+                        "block",
+                        "non_intent_workflow_phrase",
+                        split,
+                        group_id,
+                        "candidate is workflow language rather than a user intent",
+                        candidate_id,
+                    )
                 if key and key in normalize_text(prompt) and source != "oracle_target":
                     add("block", "prompt_history_copy", split, group_id, "candidate appears verbatim in prompt/history", candidate_id)
                 if source.startswith("cross_user"):
-                    add("block", "cross_user_positive_candidate", split, group_id, "cross-user candidate cannot receive positive mass", candidate_id)
+                    add(
+                        "block",
+                        "unreviewed_cross_user_group_candidate",
+                        split,
+                        group_id,
+                        "cross-user records must remain outside Listwise candidates until reviewed",
+                        candidate_id,
+                    )
                 reward = candidate.get("reward")
                 required_reward = {"R_task", "R_user", "R_context", "R_specificity", "total"}
                 if not isinstance(reward, dict) or not required_reward.issubset(reward):
@@ -354,6 +380,7 @@ def audit_v4_groups(
         "status": "failed" if block_count else "passed_with_warnings" if warning_count else "passed",
         "group_counts": {"train": len(train_groups), "eval": len(eval_groups)},
         "candidate_count": candidate_total,
+        "non_intent_workflow_phrase_count": non_intent_workflow_phrase_count,
         "unavailable_image_count": unavailable_image_count,
         "cross_user_rejected_count": cross_user_rejected_count,
         "cross_user_analysis_count": cross_user_analysis_count,

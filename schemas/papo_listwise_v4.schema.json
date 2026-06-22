@@ -106,8 +106,7 @@
             "oracle_target",
             "ui_tars_sft",
             "same_user_similar_intent",
-            "same_user_similar_context_different_intent",
-            "synthetic_smoke"
+            "same_user_similar_context_different_intent"
           ]
         },
         "reward": {
@@ -129,7 +128,11 @@
             "rank": {"type": "integer", "minimum": 1, "maximum": 4},
             "target_probability": {"type": "number", "minimum": 0, "maximum": 1},
             "eligibility": {
-              "enum": ["listwise", "contrast_only_zero_mass", "review_required_zero_mass"]
+              "enum": [
+                "listwise",
+                "contrast_only_zero_mass",
+                "review_required_zero_mass"
+              ]
             }
           }
         }

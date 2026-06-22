@@ -14,6 +14,7 @@ Listwise-v4 is a new, isolated FingerTip-20K proactive-suggestion path. It does 
 - The oracle receives 0.90 target mass by default. Same-user/similar-context-but-different-intent candidates remain in the grouped softmax with exactly zero target mass, so raising their model score increases loss instead of teaching them as answers.
 - Every group and source manifest records normalized target recurrence in previous history. Quality reports expose exact and substring recurrence rates so repeated-history and novel-intent evaluation can be reported separately.
 - Without imported formal candidates, only `synthetic_smoke_not_for_formal_training` releases can be built. The trainer rejects that release status.
+- A synthetic smoke release does not synthesize candidate text. It uses only provenance-bearing same-user retrieval candidates. Unreviewed cross-user records remain isolated in metadata and candidate-pool reports; they never enter Listwise competition. Tasks without any safe same-user contrast are explicitly replaced in the sampled smoke set and reported, never filled with workflow phrases such as “先询问用户”.
 - DPO remains out of scope until a formal v4 smoke run beats the unchanged SFT strict-holdout baseline.
 
 ## Local sequence

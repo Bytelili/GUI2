@@ -634,14 +634,12 @@ def _candidate_reward(text: str, target: str, source: str) -> dict[str, float]:
         "same_user_similar_intent": 0.9,
         "same_user_similar_context_different_intent": 0.8,
         "ui_tars_sft": 0.5,
-        "synthetic_smoke": 0.5,
     }.get(source, 0.0)
     context = {
         "oracle_target": 1.0,
         "same_user_similar_intent": 0.8,
         "same_user_similar_context_different_intent": 0.9,
         "ui_tars_sft": 1.0,
-        "synthetic_smoke": 1.0,
     }.get(source, 0.0)
     specificity = _specificity(text)
     total = 0.55 * task + 0.20 * user + 0.15 * context + 0.10 * specificity
@@ -983,10 +981,6 @@ def retrieval_pool_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, list[d
     }
 
 
-def _synthetic_negative(target: str) -> str:
-    return f"先询问用户是否需要{target.rstrip('。')}"
-
-
 def _target_history_recurrence(target: str, history: list[Any]) -> dict[str, Any]:
     target_key = normalize_text(target)
     history_items = [item for item in history if isinstance(item, dict)]
@@ -1047,13 +1041,6 @@ def build_groups(
                     candidate_specs.append({"text": str(text).strip(), "source": "ui_tars_sft"})
                 if len(candidate_specs) >= 4:
                     break
-        positive_alternative_sources = {"same_user_similar_intent", "ui_tars_sft", "synthetic_smoke"}
-        if synthetic_smoke and not any(
-            spec.get("source") in positive_alternative_sources
-            and spec.get("eligibility", "listwise") == "listwise"
-            for spec in candidate_specs
-        ):
-            candidate_specs.append({"text": _synthetic_negative(target_text), "source": "synthetic_smoke"})
         seen: set[str] = set()
         candidates: list[dict[str, Any]] = []
         for spec in candidate_specs:
@@ -1065,7 +1052,7 @@ def build_groups(
             reward = _candidate_reward(text, target_text, source)
             candidates.append(
                 {
-                    "candidate_id": sha256_json([task_id, source, key])[:24],
+                    "candidate_id": str(spec.get("candidate_id") or sha256_json([task_id, source, key])[:24]),
                     "text": text,
                     "source": source,
                     "reward": reward,
@@ -1085,7 +1072,10 @@ def build_groups(
                 }
             )
         if len(candidates) < 2:
-            raise V4ValidationError(f"Task {task_id} has no usable non-oracle candidate.")
+            raise V4ValidationError(
+                f"Task {task_id} has no safe retrieved non-oracle candidate; "
+                "replace it in the smoke sample or import formal model candidates."
+            )
         candidates.sort(
             key=lambda item: (
                 item["source"] != "oracle_target",
