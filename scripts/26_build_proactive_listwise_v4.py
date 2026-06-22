@@ -43,6 +43,8 @@ def main() -> None:
     parser.add_argument("--image-root", type=Path, action="append", default=[])
     parser.add_argument("--require-local-images", action="store_true")
     parser.add_argument("--min-manual-review-fraction", type=float)
+    parser.add_argument("--min-same-user-similarity", type=float, default=0.20)
+    parser.add_argument("--max-global-candidate-frequency", type=int)
     args = parser.parse_args()
     try:
         source_manifest_path = args.workspace / "manifests" / "source_task_manifest.json"
@@ -67,10 +69,18 @@ def main() -> None:
         train_tasks = stratified_tasks(all_train_tasks, args.train_limit if args.release_kind == "smoke_v4" else 0, args.seed)
         eval_tasks = stratified_tasks(all_eval_tasks, args.eval_limit if args.release_kind == "smoke_v4" else 0, args.seed + 1)
         train_pool_rows = build_retrieval_candidate_pools(
-            train_tasks, all_train_tasks, split="train"
+            train_tasks,
+            all_train_tasks,
+            split="train",
+            min_same_user_similarity=args.min_same_user_similarity,
+            max_global_text_frequency=args.max_global_candidate_frequency,
         )
         eval_pool_rows = build_retrieval_candidate_pools(
-            eval_tasks, all_train_tasks, split="eval"
+            eval_tasks,
+            all_train_tasks,
+            split="eval",
+            min_same_user_similarity=args.min_same_user_similarity,
+            max_global_text_frequency=args.max_global_candidate_frequency,
         )
         train_retrieval = retrieval_pool_map(train_pool_rows)
         eval_retrieval = retrieval_pool_map(eval_pool_rows)

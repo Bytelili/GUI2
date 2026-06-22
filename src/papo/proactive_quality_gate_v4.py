@@ -8,7 +8,13 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from .proactive_listwise_v4 import FORBIDDEN_TARGET_SPLITS, PROTOCOL_ID, normalize_text, write_json
+from .proactive_listwise_v4 import (
+    FORBIDDEN_TARGET_SPLITS,
+    GENERIC_LAUNCHER_APPS,
+    PROTOCOL_ID,
+    normalize_text,
+    write_json,
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +58,7 @@ def audit_v4_groups(
     allow_unavailable_images: bool = False,
     source_manifest: dict[str, Any] | None = None,
     min_oracle_margin: float = 0.15,
+    max_non_oracle_positive_mass: float = 0.10,
     max_answer_fraction: float = 0.05,
     min_manual_review_fraction: float = 0.0,
 ) -> tuple[dict[str, Any], list[V4Issue]]:
@@ -83,6 +90,7 @@ def audit_v4_groups(
             group_id = str(group.get("group_id") or "")
             task_id = str(group.get("task_id") or "")
             metadata = group.get("metadata") if isinstance(group.get("metadata"), dict) else {}
+            cross_pool_items: list[dict[str, Any]] = []
             if not group_id or group_id in all_group_ids:
                 add("block", "duplicate_or_missing_group_id", split, group_id or f"index:{group_index}", "group_id must be unique")
             all_group_ids.add(group_id)
@@ -116,6 +124,7 @@ def audit_v4_groups(
                     if not isinstance(item, dict) or item.get("source") != "cross_user_similar_intent":
                         add("block", "invalid_cross_user_pool", split, group_id, f"invalid record in {field}")
                         continue
+                    cross_pool_items.append(item)
                     if item.get("eligibility") not in expected_eligibility:
                         add("block", "cross_user_eligibility_mismatch", split, group_id, str(item.get("candidate_id")))
                     if str(item.get("source_user_id") or "") == str(metadata.get("user_id") or ""):
@@ -177,6 +186,31 @@ def audit_v4_groups(
             margins.append(margin)
             if margin < min_oracle_margin:
                 add("block", "weak_oracle_margin", split, group_id, f"margin={margin:.6f} < {min_oracle_margin:.6f}")
+            non_oracle_positive_mass = sum(
+                value for index, value in enumerate(probs) if index != actual_oracle and value > 0.0
+            )
+            if non_oracle_positive_mass > max_non_oracle_positive_mass + 1e-6:
+                add(
+                    "block",
+                    "excess_non_oracle_positive_mass",
+                    split,
+                    group_id,
+                    f"mass={non_oracle_positive_mass:.6f} > {max_non_oracle_positive_mass:.6f}",
+                )
+
+            oracle_text_key = normalize_text(candidates[actual_oracle].get("text"))
+            prompt_key = normalize_text(prompt)
+            cross_texts: set[str] = set()
+            for item in cross_pool_items:
+                cross_key = normalize_text(item.get("text"))
+                candidate_id = str(item.get("candidate_id") or "")
+                if not cross_key or cross_key in cross_texts:
+                    add("block", "duplicate_cross_user_candidate", split, group_id, candidate_id)
+                cross_texts.add(cross_key)
+                if cross_key == oracle_text_key:
+                    add("block", "cross_user_oracle_duplicate", split, group_id, candidate_id)
+                if cross_key and cross_key in prompt_key:
+                    add("block", "cross_user_prompt_history_copy", split, group_id, candidate_id)
 
             ids: set[str] = set()
             texts: set[str] = set()
@@ -213,6 +247,24 @@ def audit_v4_groups(
                         add("block", "same_user_identity_mismatch", split, group_id, source, candidate_id)
                     if not str(candidate_metadata.get("source_time") or "") < str(metadata.get("target_time") or ""):
                         add("block", "same_user_non_causal", split, group_id, source, candidate_id)
+                if source == "same_user_similar_intent":
+                    retrieval = candidate_metadata.get("retrieval") or {}
+                    similarity = float(retrieval.get("semantic_similarity", 0.0))
+                    class_match = bool(
+                        metadata.get("intent_class")
+                        and candidate_metadata.get("source_intent_class") == metadata.get("intent_class")
+                    )
+                    app_match = bool(
+                        metadata.get("target_app")
+                        and candidate_metadata.get("source_app") == metadata.get("target_app")
+                        and metadata.get("target_app") not in GENERIC_LAUNCHER_APPS
+                        and similarity >= 0.35
+                    )
+                    if similarity < 0.20 or not (class_match or app_match):
+                        add("block", "weak_same_user_intent_candidate", split, group_id, f"similarity={similarity:.6f}", candidate_id)
+                if source == "same_user_similar_context_different_intent":
+                    if candidate_metadata.get("eligibility") != "contrast_only_zero_mass" or probs[index] != 0.0:
+                        add("block", "context_contrast_has_positive_mass", split, group_id, f"probability={probs[index]:.6f}", candidate_id)
                 if candidate_metadata.get("rank") != expected_ranks[index]:
                     add("block", "rank_probability_mismatch", split, group_id, f"candidate rank != {expected_ranks[index]}", candidate_id)
                 try:
@@ -225,23 +277,14 @@ def audit_v4_groups(
                     reviewed += 1
                 source_counts[source] += 1
                 answer_counts[key] += 1
+            for duplicate_text in cross_texts & texts:
+                add("block", "cross_user_duplicates_group_candidate", split, group_id, duplicate_text[:120])
             if not any(bool((item.get("metadata") or {}).get("reviewed")) for item in candidates):
-                reward_ranks = {
-                    index: rank
-                    for rank, index in enumerate(
-                        sorted(range(len(reward_totals)), key=reward_totals.__getitem__, reverse=True), start=1
-                    )
-                }
-                for index, candidate in enumerate(candidates):
-                    if candidate.get("metadata", {}).get("rank") != reward_ranks[index]:
-                        add(
-                            "block",
-                            "reward_rank_mismatch",
-                            split,
-                            group_id,
-                            f"reward-derived rank={reward_ranks[index]}",
-                            str(candidate.get("candidate_id") or ""),
-                        )
+                positive_indices = [index for index, probability in enumerate(probs) if probability > 0.0]
+                reward_order = sorted(positive_indices, key=reward_totals.__getitem__, reverse=True)
+                probability_order = sorted(positive_indices, key=probs.__getitem__, reverse=True)
+                if reward_order != probability_order:
+                    add("block", "reward_rank_mismatch", split, group_id, "positive-mass reward/probability order differs")
 
     overlap = all_task_ids["train"] & all_task_ids["eval"]
     if overlap:

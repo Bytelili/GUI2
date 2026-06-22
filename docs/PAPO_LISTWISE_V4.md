@@ -9,6 +9,7 @@ Listwise-v4 is a new, isolated FingerTip-20K proactive-suggestion path. It does 
 - Git contains code, schema, tests, templates, and synthetic fixtures only.
 - Candidate generation is two-stage. Stage A emits target-free requests; Stage B validates externally generated UI-TARS/SFT results and their SHA256/provenance.
 - Retrieval candidates are built locally from strict-train references: same-user/similar-intent and same-user/similar-context candidates may enter Listwise after prompt-copy filtering; cross-user similar-intent candidates are isolated as analysis or future DPO rejected records with zero Listwise mass.
+- The oracle receives 0.90 target mass by default. Same-user/similar-context-but-different-intent candidates remain in the grouped softmax with exactly zero target mass, so raising their model score increases loss instead of teaching them as answers.
 - Without imported formal candidates, only `synthetic_smoke_not_for_formal_training` releases can be built. The trainer rejects that release status.
 - DPO remains out of scope until a formal v4 smoke run beats the unchanged SFT strict-holdout baseline.
 

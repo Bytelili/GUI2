@@ -189,10 +189,15 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
         context["target"]["intent_class"] = "日程管理"
         context["target"]["app"] = "calendar.app"
         cross = _task("cross-intent", "train", "u2", "20260203_080000", self.image, "打开闹钟设置八点提醒")
+        cross_oracle = _task("cross-oracle", "train", "u3", "20260203_070000", self.image, "打开闹钟设置十点提醒")
+        cross_history = _task("cross-history", "train", "u4", "20260203_060000", self.image, "打开音乐")
         future = _task("future", "train", "u1", "20260220_100000", self.image, "打开闹钟设置十一点提醒")
         copied = _task("history-copy", "train", "u1", "20260201_070000", self.image, "打开音乐")
         rows = build_retrieval_candidate_pools(
-            [target], [target, similar, context, cross, future, copied], split="train", max_per_type=2
+            [target],
+            [target, similar, context, cross, cross_oracle, cross_history, future, copied],
+            split="train",
+            max_per_type=2,
         )
         candidates = rows[0]["candidates"]
         self.assertEqual(candidates["same_user_similar_intent"][0]["source_task_id"], "same-intent")
@@ -203,6 +208,7 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
         for values in candidates.values():
             self.assertTrue(all(item["source_time"] < "20260210_100000" for item in values))
             self.assertTrue(all(item["source_task_id"] != "history-copy" for item in values))
+            self.assertTrue(all(item["source_task_id"] not in {"cross-oracle", "cross-history"} for item in values))
         with self.assertRaisesRegex(V4ValidationError, "strict train partition"):
             build_retrieval_candidate_pools([target], [self.eval_tasks[0]], split="train")
 
@@ -217,6 +223,22 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
         self.assertIn("same_user_similar_intent", sources)
         self.assertIn("same_user_similar_context_different_intent", sources)
         self.assertNotIn("cross_user_similar_intent", sources)
+        context_index = next(
+            index
+            for index, candidate in enumerate(groups[0]["candidates"])
+            if candidate["source"] == "same_user_similar_context_different_intent"
+        )
+        self.assertEqual(groups[0]["target_distribution"][context_index], 0.0)
+        self.assertEqual(groups[0]["candidates"][context_index]["metadata"]["eligibility"], "contrast_only_zero_mass")
+        self.assertAlmostEqual(groups[0]["target_distribution"][groups[0]["oracle_index"]], 0.90)
+        self.assertAlmostEqual(
+            sum(
+                probability
+                for index, probability in enumerate(groups[0]["target_distribution"])
+                if index != groups[0]["oracle_index"]
+            ),
+            0.10,
+        )
         rejected = groups[0]["metadata"]["dpo_rejected_candidates"]
         analysis = groups[0]["metadata"]["cross_user_analysis_candidates"]
         self.assertEqual(len(rejected) + len(analysis), 1)

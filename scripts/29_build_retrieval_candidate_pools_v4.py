@@ -50,6 +50,8 @@ def main() -> None:
     parser.add_argument("--workspace", type=Path, required=True)
     parser.add_argument("--max-per-type", type=int, default=2)
     parser.add_argument("--pseudo-negative-similarity", type=float, default=0.55)
+    parser.add_argument("--min-same-user-similarity", type=float, default=0.20)
+    parser.add_argument("--max-global-text-frequency", type=int)
     args = parser.parse_args()
     train_tasks, eval_tasks = read_jsonl(args.train_tasks), read_jsonl(args.eval_tasks)
     train_rows = build_retrieval_candidate_pools(
@@ -58,6 +60,8 @@ def main() -> None:
         split="train",
         max_per_type=args.max_per_type,
         pseudo_negative_similarity=args.pseudo_negative_similarity,
+        min_same_user_similarity=args.min_same_user_similarity,
+        max_global_text_frequency=args.max_global_text_frequency,
     )
     eval_rows = build_retrieval_candidate_pools(
         eval_tasks,
@@ -65,6 +69,8 @@ def main() -> None:
         split="eval",
         max_per_type=args.max_per_type,
         pseudo_negative_similarity=args.pseudo_negative_similarity,
+        min_same_user_similarity=args.min_same_user_similarity,
+        max_global_text_frequency=args.max_global_text_frequency,
     )
     output_dir = args.workspace / "intermediate"
     train_output = output_dir / "retrieval_candidate_pool_train_v4.jsonl"
@@ -78,6 +84,9 @@ def main() -> None:
             "eval": "strict train tasks only, strictly earlier than each eval target",
             "verbatim_prompt_history_copy": "excluded",
             "cross_user_positive_listwise_probability": 0.0,
+            "same_user_similar_intent_min_similarity": args.min_same_user_similarity,
+            "same_user_context_different_intent_probability": 0.0,
+            "global_text_frequency_cap": args.max_global_text_frequency or "max(10, ceil(task_count * 0.005))",
         },
         "inputs": {
             "train_sha256": sha256_file(args.train_tasks),

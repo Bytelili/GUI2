@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -22,6 +23,11 @@ SYSTEM_PROMPT = (
 )
 FORBIDDEN_TARGET_SPLITS = {"test_suggestion.csv", "test_execution.csv", "total.csv"}
 SPACE_RE = re.compile(r"\s+")
+GENERIC_LAUNCHER_APPS = {
+    "com.android.launcher3",
+    "com.huawei.android.launcher",
+    "com.miui.home",
+}
 
 
 class V4ValidationError(ValueError):
@@ -742,9 +748,16 @@ def build_retrieval_candidate_pools(
     split: str,
     max_per_type: int = 2,
     pseudo_negative_similarity: float = 0.55,
+    min_same_user_similarity: float = 0.20,
+    max_global_text_frequency: int | None = None,
 ) -> list[dict[str, Any]]:
     r"""Build causal retrieval pools without using eval targets as references."""
-    if split not in {"train", "eval"} or max_per_type < 1:
+    if (
+        split not in {"train", "eval"}
+        or max_per_type < 1
+        or not 0.0 <= min_same_user_similarity <= 1.0
+        or (max_global_text_frequency is not None and max_global_text_frequency < 1)
+    ):
         raise V4ValidationError("Invalid retrieval pool split or max_per_type.")
     records = [_task_record(task) for task in reference_tasks]
     if any(record["partition"] != "train" or record["protocol_id"] != PROTOCOL_ID for record in records):
@@ -791,20 +804,26 @@ def build_retrieval_candidate_pools(
             similarity = _retrieval_similarity(target, source)
             scenario = float(bool(target["scenario"]) and target["scenario"] == source["scenario"])
             hour = _hour_similarity(target["time"], source["time"])
-            same_intent_family = bool(
-                (target["intent_class"] and target["intent_class"] == source["intent_class"])
-                or (target["app"] and target["app"] == source["app"])
+            class_match = bool(target["intent_class"] and target["intent_class"] == source["intent_class"])
+            specific_app_match = bool(
+                target["app"]
+                and target["app"] == source["app"]
+                and target["app"] not in GENERIC_LAUNCHER_APPS
             )
-            if same_intent_family:
+            same_intent_family = class_match or (specific_app_match and similarity >= 0.35)
+            if same_intent_family and similarity >= min_same_user_similarity:
                 same_similar.append((0.65 * similarity + 0.20 * scenario + 0.15 * hour, source))
-            elif scenario > 0.0 or hour >= 0.75:
+            elif not class_match and not specific_app_match and (scenario > 0.0 or hour >= 0.75):
                 same_context.append((0.15 * similarity + 0.55 * scenario + 0.30 * hour, source))
+            elif same_intent_family:
+                exclusions["same_user_similarity_below_threshold"] += 1
 
         cross_sources: dict[str, dict[str, Any]] = {}
         for source in by_class.get(target["intent_class"], []):
             cross_sources[source["task_id"]] = source
-        for source in by_app.get(target["app"], []):
-            cross_sources[source["task_id"]] = source
+        if target["app"] not in GENERIC_LAUNCHER_APPS:
+            for source in by_app.get(target["app"], []):
+                cross_sources[source["task_id"]] = source
         cross_similar: list[tuple[float, dict[str, Any], str]] = []
         for source in cross_sources.values():
             if source["user_id"] == target["user_id"]:
@@ -814,6 +833,12 @@ def build_retrieval_candidate_pools(
                 continue
             key = normalize_text(source["intent"])
             if not key:
+                continue
+            if key == target["_normalized_intent"]:
+                exclusions["cross_user_oracle_text_duplicate"] += 1
+                continue
+            if any(key in history_key or history_key in key for history_key in history_texts):
+                exclusions["cross_user_prompt_history_copy"] += 1
                 continue
             similarity = _retrieval_similarity(target, source)
             scenario = float(bool(target["scenario"]) and target["scenario"] == source["scenario"])
@@ -829,26 +854,53 @@ def build_retrieval_candidate_pools(
         same_similar.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
         same_context.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
         cross_similar.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
-        candidates = {
-            "same_user_similar_intent": [
-                _retrieval_candidate(target, source, "same_user_similar_intent", score, eligibility="listwise")
-                for score, source in same_similar[:max_per_type]
-            ],
-            "same_user_similar_context_different_intent": [
-                _retrieval_candidate(
-                    target,
-                    source,
-                    "same_user_similar_context_different_intent",
-                    score,
-                    eligibility="listwise",
-                )
-                for score, source in same_context[:max_per_type]
-            ],
-            "cross_user_similar_intent": [
-                _retrieval_candidate(target, source, "cross_user_similar_intent", score, eligibility=eligibility)
-                for score, source, eligibility in cross_similar[:max_per_type]
-            ],
+        candidates: dict[str, list[dict[str, Any]]] = {
+            "same_user_similar_intent": [],
+            "same_user_similar_context_different_intent": [],
+            "cross_user_similar_intent": [],
         }
+        seen_texts: set[str] = set()
+        selections = (
+            (
+                "same_user_similar_intent",
+                (
+                    _retrieval_candidate(target, source, "same_user_similar_intent", score, eligibility="listwise")
+                    for score, source in same_similar
+                ),
+            ),
+            (
+                "same_user_similar_context_different_intent",
+                (
+                    _retrieval_candidate(
+                        target,
+                        source,
+                        "same_user_similar_context_different_intent",
+                        score,
+                        eligibility="contrast_only_zero_mass",
+                    )
+                    for score, source in same_context
+                ),
+            ),
+            (
+                "cross_user_similar_intent",
+                (
+                    _retrieval_candidate(
+                        target, source, "cross_user_similar_intent", score, eligibility=eligibility
+                    )
+                    for score, source, eligibility in cross_similar
+                ),
+            ),
+        )
+        for relation, values in selections:
+            for candidate in values:
+                key = normalize_text(candidate["text"])
+                if key in seen_texts:
+                    exclusions["within_task_duplicate_candidate"] += 1
+                    continue
+                seen_texts.add(key)
+                candidates[relation].append(candidate)
+                if len(candidates[relation]) >= max_per_type:
+                    break
         pools.append(
             {
                 "task_id": target["task_id"],
@@ -861,6 +913,32 @@ def build_retrieval_candidate_pools(
                 "exclusion_counts": dict(exclusions),
             }
         )
+    frequency_cap = max_global_text_frequency or max(10, math.ceil(len(target_tasks) * 0.005))
+    occurrences: dict[tuple[str, str], list[tuple[float, str, str]]] = defaultdict(list)
+    for row in pools:
+        for relation, candidates in row["candidates"].items():
+            for candidate in candidates:
+                occurrences[(relation, normalize_text(candidate["text"]))].append(
+                    (float(candidate["retrieval"]["score"]), row["task_id"], candidate["candidate_id"])
+                )
+    allowed: dict[tuple[str, str], set[str]] = {}
+    for key, values in occurrences.items():
+        if len(values) > frequency_cap:
+            values.sort(reverse=True)
+            allowed[key] = {candidate_id for _, _, candidate_id in values[:frequency_cap]}
+    if allowed:
+        for row in pools:
+            for relation, candidates in row["candidates"].items():
+                filtered = []
+                for candidate in candidates:
+                    key = (relation, normalize_text(candidate["text"]))
+                    if key in allowed and candidate["candidate_id"] not in allowed[key]:
+                        row["exclusion_counts"]["global_candidate_frequency_cap"] = (
+                            int(row["exclusion_counts"].get("global_candidate_frequency_cap", 0)) + 1
+                        )
+                    else:
+                        filtered.append(candidate)
+                row["candidates"][relation] = filtered
     return pools
 
 
@@ -883,7 +961,7 @@ def build_groups(
     model_candidates: dict[str, list[str]] | None,
     retrieval_candidates: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
     synthetic_smoke: bool,
-    oracle_probability: float = 0.80,
+    oracle_probability: float = 0.90,
 ) -> list[dict[str, Any]]:
     if not 0.5 < oracle_probability < 1.0:
         raise V4ValidationError("oracle_probability must be between 0.5 and 1.0")
@@ -906,11 +984,16 @@ def build_groups(
         if model_candidates is not None:
             for text in model_candidates.get(task_id, []):
                 key = normalize_text(text)
-                if key and key != normalize_text(target_text) and key not in history_text:
+                if (
+                    key
+                    and key != normalize_text(target_text)
+                    and not any(key in history_key or history_key in key for history_key in history_text if history_key)
+                ):
                     candidate_specs.append({"text": str(text).strip(), "source": "ui_tars_sft"})
                 if len(candidate_specs) >= 4:
                     break
-        if synthetic_smoke and len(candidate_specs) < 2:
+        positive_alternative_sources = {"same_user_similar_intent", "ui_tars_sft", "synthetic_smoke"}
+        if synthetic_smoke and not any(spec.get("source") in positive_alternative_sources for spec in candidate_specs):
             candidate_specs.append({"text": _synthetic_negative(target_text), "source": "synthetic_smoke"})
         seen: set[str] = set()
         candidates: list[dict[str, Any]] = []
@@ -934,20 +1017,45 @@ def build_groups(
                         "source_episode_id": spec.get("source_episode_id", ""),
                         "source_user_id": spec.get("source_user_id", ""),
                         "source_time": spec.get("source_time", ""),
+                        "source_scenario": spec.get("source_scenario", ""),
+                        "source_intent_class": spec.get("source_intent_class", ""),
+                        "source_app": spec.get("source_app", ""),
                         "retrieval": spec.get("retrieval", {}),
+                        "eligibility": spec.get("eligibility", "listwise"),
                     },
                 }
             )
         if len(candidates) < 2:
             raise V4ValidationError(f"Task {task_id} has no usable non-oracle candidate.")
-        candidates.sort(key=lambda item: (item["source"] != "oracle_target", -item["reward"]["total"]))
+        candidates.sort(
+            key=lambda item: (
+                item["source"] != "oracle_target",
+                item["metadata"].get("eligibility") == "contrast_only_zero_mass",
+                -item["reward"]["total"],
+            )
+        )
         oracle_index = next(index for index, item in enumerate(candidates) if item["source"] == "oracle_target")
-        non_oracle_total = sum(max(float(item["reward"]["total"]), 1e-8) for item in candidates if item["source"] != "oracle_target")
+        positive_non_oracle_indices = [
+            index
+            for index, item in enumerate(candidates)
+            if index != oracle_index and item["metadata"].get("eligibility") != "contrast_only_zero_mass"
+        ]
+        effective_oracle_probability = oracle_probability if positive_non_oracle_indices else 1.0
+        non_oracle_total = sum(
+            max(float(candidates[index]["reward"]["total"]), 1e-8) for index in positive_non_oracle_indices
+        )
         distribution: list[float] = []
         for index, item in enumerate(candidates):
-            probability = oracle_probability if index == oracle_index else (
-                (1.0 - oracle_probability) * max(float(item["reward"]["total"]), 1e-8) / non_oracle_total
-            )
+            if index == oracle_index:
+                probability = effective_oracle_probability
+            elif index in positive_non_oracle_indices:
+                probability = (
+                    (1.0 - effective_oracle_probability)
+                    * max(float(item["reward"]["total"]), 1e-8)
+                    / non_oracle_total
+                )
+            else:
+                probability = 0.0
             item["metadata"]["target_probability"] = probability
             distribution.append(probability)
         ranked = sorted(range(len(candidates)), key=lambda index: distribution[index], reverse=True)
@@ -976,6 +1084,7 @@ def build_groups(
                     "target_time": inputs.get("time"),
                     "user_id": inputs.get("user_id"),
                     "intent_class": target.get("intent_class"),
+                    "target_app": target.get("app"),
                     "oracle_text_sha256": hashlib.sha256(target_text.encode("utf-8")).hexdigest(),
                     "target_identity_sha256": sha256_json(
                         [inputs.get("user_id"), inputs.get("time"), normalize_text(target_text)]
