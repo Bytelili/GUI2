@@ -19,7 +19,7 @@ Listwise-v4 is a new, isolated FingerTip-20K proactive-suggestion path. It does 
 
 ## Local sequence
 
-Run scripts 22 through 27 with explicit `--train-tasks`, `--eval-tasks`, and `--workspace` paths. Script 22 writes `manifests/source_task_manifest.json` and a separate JSONL report for every unavailable image while retaining the original path. Script 23 creates request shards or imports model results. Scripts 24/25 provide UTF-8-BOM CSV review and an immutable JSONL audit log. Script 26 builds a new timestamped release and archive. Script 27 rechecks quality, SHA256, and manifest bindings.
+Run scripts 22 through 30 with explicit task, candidate, and workspace paths. Script 22 writes `manifests/source_task_manifest.json` and a separate JSONL report for every unavailable image while retaining the original path. Script 23 creates request shards or imports model results. Script 30 validates the import manifest and builds candidate-backed draft groups without publishing a release. Scripts 24/25 provide split-isolated UTF-8-BOM CSV review and an immutable JSONL audit log. Script 26 builds a new timestamped release and archive only after reviewed train/eval groups exist. Script 27 rechecks quality, SHA256, and manifest bindings.
 
 Script 28 is the server registration boundary. It verifies `SHA256SUMS.txt`, refuses a synthetic release unless explicitly allowed for format-only smoke checks, copies only v4 artifacts, and merges only the two new v4 dataset entries while preserving v2/v3.
 
@@ -36,6 +36,18 @@ python scripts/27_audit_proactive_listwise_v4.py --release-dir <TIMESTAMPED_RELE
 ```
 
 This validates the local machinery; it is not evidence that full-v4 data exists.
+
+After validated UI-TARS/SFT candidates have been imported, build and review the formal draft locally:
+
+```powershell
+python scripts/30_build_proactive_listwise_v4_draft.py --train-tasks <TRAIN_JSONL> --eval-tasks <EVAL_JSONL> --workspace <WORKSPACE> --train-candidates <IMPORTED_TRAIN_JSONL> --eval-candidates <IMPORTED_EVAL_JSONL> --candidate-import-manifest <IMPORT_MANIFEST_JSON> --image-root <LOCAL_IMAGE_ROOT>
+python scripts/24_export_manual_review_v4.py --groups <TRAIN_DRAFT_GROUPS_JSON> --workspace <WORKSPACE> --split train --sample-size 500
+python scripts/24_export_manual_review_v4.py --groups <EVAL_DRAFT_GROUPS_JSON> --workspace <WORKSPACE> --split eval --sample-size 500
+python scripts/25_apply_manual_review_v4.py --groups <TRAIN_DRAFT_GROUPS_JSON> --candidate-review <TRAIN_CANDIDATE_REVIEW_CSV> --group-review <TRAIN_GROUP_REVIEW_CSV> --output <TRAIN_REVIEWED_GROUPS_JSON> --audit-log <TRAIN_REVIEW_AUDIT_JSONL>
+python scripts/25_apply_manual_review_v4.py --groups <EVAL_DRAFT_GROUPS_JSON> --candidate-review <EVAL_CANDIDATE_REVIEW_CSV> --group-review <EVAL_GROUP_REVIEW_CSV> --output <EVAL_REVIEWED_GROUPS_JSON> --audit-log <EVAL_REVIEW_AUDIT_JSONL>
+```
+
+The review CSV contains the complete prompt, image paths, candidate eligibility, source task/user/time, and retrieval similarities. Train and eval exports are written under separate `manual_review/train` and `manual_review/eval` directories and cannot overwrite one another.
 
 ## Training behavior
 

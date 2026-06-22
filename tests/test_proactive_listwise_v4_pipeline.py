@@ -435,6 +435,104 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
                 timestamp="20260621T000001Z",
             )
 
+    def test_candidate_backed_draft_and_split_review_exports(self) -> None:
+        source_manifest = audit_source_tasks(self.train_path, self.eval_path, self.workspace)
+        imported_paths = {}
+        import_report = {}
+        for split, task_path, tasks in (
+            ("train", self.train_path, self.train_tasks),
+            ("eval", self.eval_path, self.eval_tasks),
+        ):
+            candidate_path = self.root / f"ui_tars_sft_{split}_candidates.jsonl"
+            write_jsonl(
+                candidate_path,
+                [
+                    {
+                        "task_id": task["task_id"],
+                        "candidates": [f"打开设置查看网络状态-{task['task_id']}"],
+                        "candidate_manifest_sha256": "b" * 64,
+                        "provenance": {
+                            "base_model": "ui-tars-test",
+                            "adapter": "sft-test",
+                            "decoding": {"temperature": 0.8},
+                            "task_file_sha256": sha256_file(task_path),
+                            "shard_count": 1,
+                        },
+                    }
+                    for task in tasks
+                ],
+            )
+            imported_paths[split] = candidate_path
+            import_report[split] = {
+                "status": "passed",
+                "task_count": len(tasks),
+                "task_file_sha256": sha256_file(task_path),
+                "output": str(candidate_path.resolve()),
+                "output_sha256": sha256_file(candidate_path),
+            }
+        import_manifest = self.root / "candidate_import_manifest.json"
+        write_json(import_manifest, import_report)
+        subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).resolve().parents[1] / "scripts" / "30_build_proactive_listwise_v4_draft.py"),
+                "--train-tasks",
+                str(self.train_path),
+                "--eval-tasks",
+                str(self.eval_path),
+                "--workspace",
+                str(self.workspace),
+                "--train-candidates",
+                str(imported_paths["train"]),
+                "--eval-candidates",
+                str(imported_paths["eval"]),
+                "--candidate-import-manifest",
+                str(import_manifest),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        draft_dir = self.workspace / "intermediate" / "draft_v4"
+        train_groups = draft_dir / "papo_proactive_train_listwise_v4.draft.groups.json"
+        eval_groups = draft_dir / "papo_proactive_eval_listwise_v4.draft.groups.json"
+        draft_manifest = json.loads(
+            (self.workspace / "manifests" / "listwise_v4_draft_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(draft_manifest["status"], "passed_for_manual_review")
+        self.assertFalse(draft_manifest["formal_release"])
+
+        for split, groups_path in (("train", train_groups), ("eval", eval_groups)):
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parents[1] / "scripts" / "24_export_manual_review_v4.py"),
+                    "--groups",
+                    str(groups_path),
+                    "--workspace",
+                    str(self.workspace),
+                    "--split",
+                    split,
+                    "--sample-size",
+                    "1",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            review_dir = self.workspace / "manual_review" / split
+            candidate_review_path = review_dir / f"manual_candidate_review_{split}.csv"
+            self.assertTrue(candidate_review_path.is_file())
+            self.assertTrue((review_dir / f"manual_group_review_{split}.csv").is_file())
+            self.assertTrue((review_dir / f"manual_review_export_{split}.manifest.json").is_file())
+            with candidate_review_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                review_rows = list(csv.DictReader(handle))
+            self.assertTrue(review_rows[0]["prompt_text"])
+            self.assertTrue(review_rows[0]["image_paths_json"])
+            self.assertIn("candidate_eligibility", review_rows[0])
+            self.assertIn("retrieval_semantic_similarity", review_rows[0])
+        self.assertEqual(source_manifest["hard_error_count"], 0)
+
     def test_quality_gate_detects_train_eval_target_leakage(self) -> None:
         train = build_groups(
             [self.train_tasks[0]],

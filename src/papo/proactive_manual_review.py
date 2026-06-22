@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import random
 from collections import defaultdict
@@ -19,6 +20,15 @@ CANDIDATE_FIELDS = [
     "candidate_source",
     "candidate_text",
     "oracle_text",
+    "prompt_text",
+    "image_paths_json",
+    "candidate_eligibility",
+    "source_task_id",
+    "source_user_id",
+    "source_time",
+    "retrieval_semantic_similarity",
+    "retrieval_scenario_match",
+    "retrieval_hour_similarity",
     "reward_task",
     "reward_user",
     "reward_context",
@@ -42,6 +52,10 @@ GROUP_FIELDS = [
     "candidate_count",
     "oracle_margin",
     "priority_source",
+    "prompt_text",
+    "image_paths_json",
+    "history_recurrence_exact",
+    "history_recurrence_substring",
     "decision",
     "reason",
     "reviewer",
@@ -123,6 +137,13 @@ def export_manual_review(
         split = str(metadata.get("partition") or "")
         candidates = group["candidates"]
         oracle = candidates[int(group["oracle_index"])]
+        prompt_text = "\n".join(
+            str(message.get("content") or "")
+            for message in group.get("messages", [])
+            if isinstance(message, dict)
+        )
+        image_paths_json = json.dumps(group.get("images") or [], ensure_ascii=False)
+        recurrence = metadata.get("target_history_recurrence") or {}
         probabilities = [float(value) for value in group["target_distribution"]]
         margin = probabilities[int(group["oracle_index"])] - max(
             value for index, value in enumerate(probabilities) if index != int(group["oracle_index"])
@@ -138,6 +159,10 @@ def export_manual_review(
                 "candidate_count": len(candidates),
                 "oracle_margin": margin,
                 "priority_source": priority,
+                "prompt_text": prompt_text,
+                "image_paths_json": image_paths_json,
+                "history_recurrence_exact": recurrence.get("normalized_exact", ""),
+                "history_recurrence_substring": recurrence.get("substring_overlap", ""),
                 "decision": "",
                 "reason": "",
                 "reviewer": "",
@@ -147,6 +172,7 @@ def export_manual_review(
         for candidate in candidates:
             reward = candidate.get("reward") if isinstance(candidate.get("reward"), dict) else {}
             candidate_metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+            retrieval = candidate_metadata.get("retrieval") if isinstance(candidate_metadata.get("retrieval"), dict) else {}
             candidate_rows.append(
                 {
                     "split": split,
@@ -156,6 +182,15 @@ def export_manual_review(
                     "candidate_source": candidate.get("source", ""),
                     "candidate_text": candidate.get("text", ""),
                     "oracle_text": oracle.get("text", ""),
+                    "prompt_text": prompt_text,
+                    "image_paths_json": image_paths_json,
+                    "candidate_eligibility": candidate_metadata.get("eligibility", ""),
+                    "source_task_id": candidate_metadata.get("source_task_id", ""),
+                    "source_user_id": candidate_metadata.get("source_user_id", ""),
+                    "source_time": candidate_metadata.get("source_time", ""),
+                    "retrieval_semantic_similarity": retrieval.get("semantic_similarity", ""),
+                    "retrieval_scenario_match": retrieval.get("scenario_match", ""),
+                    "retrieval_hour_similarity": retrieval.get("hour_similarity", ""),
                     "reward_task": reward.get("R_task", ""),
                     "reward_user": reward.get("R_user", ""),
                     "reward_context": reward.get("R_context", ""),
