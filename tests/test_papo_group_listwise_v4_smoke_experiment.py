@@ -87,6 +87,18 @@ class GroupListwiseSmokeExperimentTest(unittest.TestCase):
         self.assertEqual(group["model_name_or_path"], control["model_name_or_path"])
         self.assertEqual(group["adapter_name_or_path"], control["adapter_name_or_path"])
 
+        retrieval_path = ROOT / "configs" / "llamafactory" / (
+            "ui_tars_7b_papo_group_listwise_v4_retrieval_only.yaml"
+        )
+        retrieval = yaml.safe_load(retrieval_path.read_text(encoding="utf-8"))
+        self.assertTrue(retrieval["use_papo_group_listwise"])
+        self.assertFalse(retrieval["use_papo_listwise"])
+        self.assertFalse(retrieval["packing"])
+        self.assertFalse(retrieval["papo_allow_nonformal_smoke"])
+        self.assertTrue(retrieval["papo_allow_nonformal_retrieval"])
+        self.assertNotEqual(group["dataset_dir"], retrieval["dataset_dir"])
+        self.assertNotEqual(group["output_dir"], retrieval["output_dir"])
+
     def test_report_detects_metrics_and_anomalies(self) -> None:
         module = load_script("33_report_papo_group_listwise_v4_smoke.py")
         history = [

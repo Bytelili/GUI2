@@ -103,6 +103,9 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--report-dir", type=Path, required=True)
+    parser.add_argument("--report-prefix", default="group_listwise_v4_smoke")
+    parser.add_argument("--experiment-kind", default="retrieval-only smoke experiment")
+    parser.add_argument("--claim-boundary", default="engineering pre-experiment only; not full-v4")
     args = parser.parse_args()
 
     config_path = args.training_config.resolve()
@@ -115,11 +118,13 @@ def main() -> None:
     anomalies = scan_anomalies(log_text, rows)
     completed = any("train_runtime" in item for item in history)
     status = "completed" if completed and not anomalies else "incomplete_or_anomalous"
+    if not re.fullmatch(r"[a-zA-Z0-9_.-]+", args.report_prefix):
+        raise SystemExit("Invalid report prefix")
     report = {
         "status": status,
-        "experiment_kind": "retrieval-only smoke experiment",
+        "experiment_kind": args.experiment_kind,
         "formal_full_v4_complete": False,
-        "claim_boundary": "engineering pre-experiment only; not full-v4 and not a formal effect claim",
+        "claim_boundary": args.claim_boundary,
         "training_config": str(config_path),
         "training_config_sha256": sha256_file(config_path),
         "output_dir": str(output_dir),
@@ -132,14 +137,14 @@ def main() -> None:
         "anomalies": anomalies,
     }
     args.report_dir.mkdir(parents=True, exist_ok=True)
-    json_path = args.report_dir / "group_listwise_v4_smoke_report.json"
-    md_path = args.report_dir / "group_listwise_v4_smoke_report.md"
+    json_path = args.report_dir / f"{args.report_prefix}_report.json"
+    md_path = args.report_dir / f"{args.report_prefix}_report.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
     lines = [
-        "# PAPO Grouped Listwise-v4 Retrieval Smoke",
+        f"# {args.experiment_kind}",
         "",
-        "> Engineering pre-experiment only. This is not full-v4 and cannot support a formal effect claim.",
+        f"> {args.claim_boundary}",
         "",
         f"- Status: `{status}`",
         f"- Completed: `{completed}`",

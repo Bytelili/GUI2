@@ -3,6 +3,8 @@
 This workflow is an engineering pre-experiment over the immutable `20260622T042745Z` smoke release. It is not
 full-v4, does not use generated Draft candidates, and cannot support a formal effect claim.
 
+This smoke workflow must not be confused with the separate full-scale `retrieval_only_v4` engineering release.
+
 ## Boundaries
 
 - The release manifest and every registered dataset file remain SHA256-bound.

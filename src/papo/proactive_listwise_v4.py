@@ -1007,12 +1007,19 @@ def build_groups(
     model_candidates: dict[str, list[str]] | None,
     retrieval_candidates: dict[str, dict[str, list[dict[str, Any]]]] | None = None,
     synthetic_smoke: bool,
+    retrieval_only: bool = False,
     oracle_probability: float = 0.90,
 ) -> list[dict[str, Any]]:
     if not 0.5 < oracle_probability < 1.0:
         raise V4ValidationError("oracle_probability must be between 0.5 and 1.0")
-    if not synthetic_smoke and model_candidates is None:
-        raise V4ValidationError("Formal v4 requires imported UI-TARS SFT candidates; only smoke may be synthetic.")
+    if synthetic_smoke and retrieval_only:
+        raise V4ValidationError("A group build cannot be both synthetic smoke and retrieval-only.")
+    if not synthetic_smoke and not retrieval_only and model_candidates is None:
+        raise V4ValidationError(
+            "Formal v4 requires imported UI-TARS SFT candidates; only explicit smoke or retrieval-only builds may omit them."
+        )
+    if retrieval_only and model_candidates is not None:
+        raise V4ValidationError("Retrieval-only v4 must not contain model-generated candidates.")
     groups: list[dict[str, Any]] = []
     for task in tasks:
         task_id = str(task.get("task_id") or "")
@@ -1143,7 +1150,13 @@ def build_groups(
                         "R_user": "source-evidence prior; history-copy candidates are excluded, not rewarded by text overlap",
                         "weights": {"R_task": 0.55, "R_user": 0.20, "R_context": 0.15, "R_specificity": 0.10},
                     },
-                    "release_eligibility": "synthetic_smoke_only" if synthetic_smoke else "formal_candidate_import",
+                    "release_eligibility": (
+                        "retrieval_only_history_candidates"
+                        if retrieval_only
+                        else "synthetic_smoke_only"
+                        if synthetic_smoke
+                        else "formal_candidate_import"
+                    ),
                     "dpo_rejected_candidates": [
                         item
                         for item in retrieval.get("cross_user_similar_intent", [])

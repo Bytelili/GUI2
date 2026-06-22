@@ -207,6 +207,35 @@ class GroupListwiseLossTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
                 verify_papo_group_dataset_binding(str(manifest), str(root), allow_nonformal_smoke=True)
 
+    def test_retrieval_only_release_requires_its_explicit_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            dataset = root / "train.json"
+            dataset.write_text("[]", encoding="utf-8")
+            digest = hashlib.sha256(dataset.read_bytes()).hexdigest()
+            manifest = root / "manifest.json"
+            payload = {
+                "release_kind": "retrieval_only_v4",
+                "release_status": "retrieval_only_not_for_formal_training",
+                "formal_full_v4_complete": False,
+                "candidate_provenance": None,
+                "dataset_hashes": {"train.json": digest},
+            }
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "refuses this release"):
+                verify_papo_group_dataset_binding(str(manifest), str(root))
+            accepted = verify_papo_group_dataset_binding(
+                str(manifest), str(root), allow_nonformal_retrieval=True
+            )
+            self.assertEqual(accepted["release_kind"], "retrieval_only_v4")
+
+            payload["candidate_provenance"] = {"forbidden": True}
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "refuses this release"):
+                verify_papo_group_dataset_binding(
+                    str(manifest), str(root), allow_nonformal_retrieval=True
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

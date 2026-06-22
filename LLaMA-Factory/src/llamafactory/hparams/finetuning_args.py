@@ -537,6 +537,15 @@ class FinetuningArguments(
             )
         },
     )
+    papo_allow_nonformal_retrieval: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Allow an explicitly labeled history-retrieval-only v4 release for engineering training. "
+                "This never permits full-v4 claims."
+            )
+        },
+    )
     use_asft_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the ASFT loss."},
@@ -603,6 +612,10 @@ class FinetuningArguments(
             raise ValueError("Grouped PAPO Listwise-v4 requires `papo_dataset_manifest` and `papo_dataset_root`.")
         if self.papo_allow_nonformal_smoke and not self.use_papo_group_listwise:
             raise ValueError("`papo_allow_nonformal_smoke` is only valid with grouped PAPO Listwise-v4.")
+        if self.papo_allow_nonformal_retrieval and not self.use_papo_group_listwise:
+            raise ValueError("`papo_allow_nonformal_retrieval` is only valid with grouped PAPO Listwise-v4.")
+        if self.papo_allow_nonformal_smoke and self.papo_allow_nonformal_retrieval:
+            raise ValueError("Select exactly one PAPO non-formal release gate.")
         self.lora_target: list[str] = split_arg(self.lora_target)
         self.oft_target: list[str] = split_arg(self.oft_target)
         self.additional_target: list[str] | None = split_arg(self.additional_target)

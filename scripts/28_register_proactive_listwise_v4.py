@@ -18,14 +18,21 @@ def main() -> None:
     parser.add_argument("--release-dir", type=Path, required=True)
     parser.add_argument("--dataset-dir", type=Path, required=True)
     parser.add_argument("--allow-synthetic-smoke", action="store_true")
+    parser.add_argument("--allow-nonformal-retrieval", action="store_true")
     args = parser.parse_args()
     verification = verify_release(args.release_dir)
     if verification["status"] != "passed":
         print(json.dumps(verification, ensure_ascii=False, indent=2), file=sys.stderr)
         raise SystemExit("RELEASE REGISTRATION FAILED: SHA256 verification failed")
     manifest = json.loads((args.release_dir / "listwise_v4_manifest.json").read_text(encoding="utf-8"))
-    if manifest.get("release_status") != "formal_candidate_release" and not args.allow_synthetic_smoke:
-        raise SystemExit("RELEASE REGISTRATION FAILED: synthetic smoke requires --allow-synthetic-smoke")
+    release_status = manifest.get("release_status")
+    allowed = (
+        release_status == "formal_candidate_release"
+        or (release_status == "synthetic_smoke_not_for_formal_training" and args.allow_synthetic_smoke)
+        or (release_status == "retrieval_only_not_for_formal_training" and args.allow_nonformal_retrieval)
+    )
+    if not allowed:
+        raise SystemExit("RELEASE REGISTRATION FAILED: this non-formal release requires its explicit allow flag")
     args.dataset_dir.mkdir(parents=True, exist_ok=True)
     copied: list[str] = []
     for name in manifest["dataset_hashes"]:
@@ -36,7 +43,13 @@ def main() -> None:
         if not destination.exists():
             shutil.copy2(source, destination)
             copied.append(str(destination.resolve()))
-    for name in ["listwise_v4_manifest.json", "listwise_v4_quality_report.json", "SHA256SUMS.txt"]:
+    for name in [
+        "listwise_v4_manifest.json",
+        "listwise_v4_quality_report.json",
+        "retrieval_only_selection_report.json",
+        "retrieval_only_quality_issues.json",
+        "SHA256SUMS.txt",
+    ]:
         source = args.release_dir / name
         if not source.exists():
             continue

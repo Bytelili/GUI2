@@ -79,6 +79,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 finetuning_args.papo_dataset_manifest,
                 finetuning_args.papo_dataset_root,
                 allow_nonformal_smoke=finetuning_args.papo_allow_nonformal_smoke,
+                allow_nonformal_retrieval=finetuning_args.papo_allow_nonformal_retrieval,
             )
             if manifest.get("release_status") != "formal_candidate_release":
                 logger.warning_rank0(

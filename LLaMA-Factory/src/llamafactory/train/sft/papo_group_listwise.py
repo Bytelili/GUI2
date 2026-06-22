@@ -25,6 +25,7 @@ def verify_papo_group_dataset_binding(
     dataset_root: str,
     *,
     allow_nonformal_smoke: bool = False,
+    allow_nonformal_retrieval: bool = False,
 ) -> dict:
     manifest_file, root = Path(manifest_path), Path(dataset_root)
     if not manifest_file.is_file():
@@ -42,10 +43,18 @@ def verify_papo_group_dataset_binding(
         and release_status == "synthetic_smoke_not_for_formal_training"
         and manifest.get("formal_full_v4_complete") is False
     )
-    if not is_formal and not is_engineering_smoke:
+    is_retrieval_only = (
+        allow_nonformal_retrieval
+        and manifest.get("release_kind") == "retrieval_only_v4"
+        and release_status == "retrieval_only_not_for_formal_training"
+        and manifest.get("formal_full_v4_complete") is False
+        and manifest.get("candidate_provenance") is None
+    )
+    if not is_formal and not is_engineering_smoke and not is_retrieval_only:
         raise ValueError(
             "PAPO grouped training refuses this release. Non-formal engineering smoke requires "
-            "`papo_allow_nonformal_smoke: true` and an unchanged smoke-only manifest."
+            "`papo_allow_nonformal_smoke: true`, while retrieval-only training requires "
+            "`papo_allow_nonformal_retrieval: true` and its unchanged non-formal manifest."
         )
 
     hashes = manifest.get("dataset_hashes")
