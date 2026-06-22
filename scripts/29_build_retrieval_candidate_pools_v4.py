@@ -51,6 +51,8 @@ def main() -> None:
     parser.add_argument("--max-per-type", type=int, default=2)
     parser.add_argument("--pseudo-negative-similarity", type=float, default=0.55)
     parser.add_argument("--min-same-user-similarity", type=float, default=0.20)
+    parser.add_argument("--positive-same-user-similarity", type=float, default=0.35)
+    parser.add_argument("--max-context-similarity", type=float, default=0.75)
     parser.add_argument("--max-global-text-frequency", type=int)
     args = parser.parse_args()
     train_tasks, eval_tasks = read_jsonl(args.train_tasks), read_jsonl(args.eval_tasks)
@@ -61,6 +63,8 @@ def main() -> None:
         max_per_type=args.max_per_type,
         pseudo_negative_similarity=args.pseudo_negative_similarity,
         min_same_user_similarity=args.min_same_user_similarity,
+        positive_same_user_similarity=args.positive_same_user_similarity,
+        max_context_similarity=args.max_context_similarity,
         max_global_text_frequency=args.max_global_text_frequency,
     )
     eval_rows = build_retrieval_candidate_pools(
@@ -70,6 +74,8 @@ def main() -> None:
         max_per_type=args.max_per_type,
         pseudo_negative_similarity=args.pseudo_negative_similarity,
         min_same_user_similarity=args.min_same_user_similarity,
+        positive_same_user_similarity=args.positive_same_user_similarity,
+        max_context_similarity=args.max_context_similarity,
         max_global_text_frequency=args.max_global_text_frequency,
     )
     output_dir = args.workspace / "intermediate"
@@ -85,7 +91,11 @@ def main() -> None:
             "verbatim_prompt_history_copy": "excluded",
             "cross_user_positive_listwise_probability": 0.0,
             "same_user_similar_intent_min_similarity": args.min_same_user_similarity,
+            "same_user_similar_intent_positive_similarity": args.positive_same_user_similarity,
+            "weak_same_user_similar_intent": "retained for review with zero Listwise probability",
             "same_user_context_different_intent_probability": 0.0,
+            "same_user_context_max_similarity": args.max_context_similarity,
+            "text_normalization": "Unicode NFKC + casefold + alphanumeric characters only",
             "global_text_frequency_cap": args.max_global_text_frequency or "max(10, ceil(task_count * 0.005))",
         },
         "inputs": {

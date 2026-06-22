@@ -57,6 +57,7 @@
         "user_id",
         "oracle_text_sha256",
         "target_identity_sha256",
+        "target_history_recurrence",
         "release_eligibility"
       ],
       "properties": {
@@ -70,6 +71,24 @@
         "user_id": {"type": "string", "minLength": 1},
         "oracle_text_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "target_identity_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "target_history_recurrence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "normalized_exact",
+            "substring_overlap",
+            "exact_match_count",
+            "substring_match_count",
+            "exact_match_episode_ids"
+          ],
+          "properties": {
+            "normalized_exact": {"type": "boolean"},
+            "substring_overlap": {"type": "boolean"},
+            "exact_match_count": {"type": "integer", "minimum": 0},
+            "substring_match_count": {"type": "integer", "minimum": 0},
+            "exact_match_episode_ids": {"type": "array", "items": {"type": "string"}}
+          }
+        },
         "release_eligibility": {"enum": ["synthetic_smoke_only", "formal_candidate_import"]}
       }
     }
@@ -108,7 +127,10 @@
           "required": ["rank", "target_probability"],
           "properties": {
             "rank": {"type": "integer", "minimum": 1, "maximum": 4},
-            "target_probability": {"type": "number", "minimum": 0, "maximum": 1}
+            "target_probability": {"type": "number", "minimum": 0, "maximum": 1},
+            "eligibility": {
+              "enum": ["listwise", "contrast_only_zero_mass", "review_required_zero_mass"]
+            }
           }
         }
       }

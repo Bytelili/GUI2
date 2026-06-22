@@ -44,6 +44,8 @@ def main() -> None:
     parser.add_argument("--require-local-images", action="store_true")
     parser.add_argument("--min-manual-review-fraction", type=float)
     parser.add_argument("--min-same-user-similarity", type=float, default=0.20)
+    parser.add_argument("--positive-same-user-similarity", type=float, default=0.35)
+    parser.add_argument("--max-context-similarity", type=float, default=0.75)
     parser.add_argument("--max-global-candidate-frequency", type=int)
     args = parser.parse_args()
     try:
@@ -73,6 +75,8 @@ def main() -> None:
             all_train_tasks,
             split="train",
             min_same_user_similarity=args.min_same_user_similarity,
+            positive_same_user_similarity=args.positive_same_user_similarity,
+            max_context_similarity=args.max_context_similarity,
             max_global_text_frequency=args.max_global_candidate_frequency,
         )
         eval_pool_rows = build_retrieval_candidate_pools(
@@ -80,6 +84,8 @@ def main() -> None:
             all_train_tasks,
             split="eval",
             min_same_user_similarity=args.min_same_user_similarity,
+            positive_same_user_similarity=args.positive_same_user_similarity,
+            max_context_similarity=args.max_context_similarity,
             max_global_text_frequency=args.max_global_candidate_frequency,
         )
         train_retrieval = retrieval_pool_map(train_pool_rows)

@@ -8,6 +8,7 @@ import random
 import re
 import tarfile
 import time
+import unicodedata
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -22,7 +23,6 @@ SYSTEM_PROMPT = (
     "history. Output exactly one Chinese sentence. Never reveal hidden target fields."
 )
 FORBIDDEN_TARGET_SPLITS = {"test_suggestion.csv", "test_execution.csv", "total.csv"}
-SPACE_RE = re.compile(r"\s+")
 GENERIC_LAUNCHER_APPS = {
     "com.android.launcher3",
     "com.huawei.android.launcher",
@@ -107,7 +107,8 @@ def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
 
 
 def normalize_text(value: Any) -> str:
-    return SPACE_RE.sub("", str(value or "").strip()).casefold()
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    return "".join(character for character in normalized if character.isalnum())
 
 
 def _image_resolution(original: str, image_roots: list[Path]) -> tuple[Path | None, list[str]]:
@@ -132,6 +133,8 @@ def _audit_split(path: Path, split: str, image_roots: list[Path], missing_handle
     issue_counts: Counter[str] = Counter()
     image_count = 0
     available_image_count = 0
+    history_exact_recurrence_tasks = 0
+    history_substring_recurrence_tasks = 0
     target_signatures: set[str] = set()
 
     for line_number, task in iter_jsonl(path):
@@ -168,6 +171,9 @@ def _audit_split(path: Path, split: str, image_roots: list[Path], missing_handle
         target_signatures.add(sha256_json([user_id, target_time, normalize_text(target_intent)]))
 
         previous = inputs.get("previous_intents") if isinstance(inputs.get("previous_intents"), list) else []
+        recurrence = _target_history_recurrence(target_intent, previous)
+        history_exact_recurrence_tasks += int(recurrence["normalized_exact"])
+        history_substring_recurrence_tasks += int(recurrence["substring_overlap"])
         history_ids: list[str] = []
         for history_index, history in enumerate(previous):
             if not isinstance(history, dict):
@@ -247,6 +253,12 @@ def _audit_split(path: Path, split: str, image_roots: list[Path], missing_handle
         "image_reference_count": image_count,
         "available_image_count": available_image_count,
         "unavailable_image_count": image_count - available_image_count,
+        "history_recurrence": {
+            "normalized_exact_task_count": history_exact_recurrence_tasks,
+            "normalized_exact_task_rate": history_exact_recurrence_tasks / max(sum(task_ids.values()), 1),
+            "substring_overlap_task_count": history_substring_recurrence_tasks,
+            "substring_overlap_task_rate": history_substring_recurrence_tasks / max(sum(task_ids.values()), 1),
+        },
         "issue_counts": dict(issue_counts),
         "hard_error_count": hard_count,
         "_task_ids": set(task_ids),
@@ -749,6 +761,8 @@ def build_retrieval_candidate_pools(
     max_per_type: int = 2,
     pseudo_negative_similarity: float = 0.55,
     min_same_user_similarity: float = 0.20,
+    positive_same_user_similarity: float = 0.35,
+    max_context_similarity: float = 0.75,
     max_global_text_frequency: int | None = None,
 ) -> list[dict[str, Any]]:
     r"""Build causal retrieval pools without using eval targets as references."""
@@ -756,6 +770,8 @@ def build_retrieval_candidate_pools(
         split not in {"train", "eval"}
         or max_per_type < 1
         or not 0.0 <= min_same_user_similarity <= 1.0
+        or not min_same_user_similarity <= positive_same_user_similarity <= 1.0
+        or not 0.0 <= max_context_similarity <= 1.0
         or (max_global_text_frequency is not None and max_global_text_frequency < 1)
     ):
         raise V4ValidationError("Invalid retrieval pool split or max_per_type.")
@@ -785,7 +801,7 @@ def build_retrieval_candidate_pools(
         }
         exclusions: Counter[str] = Counter()
 
-        same_similar: list[tuple[float, dict[str, Any]]] = []
+        same_similar: list[tuple[float, dict[str, Any], str]] = []
         same_context: list[tuple[float, dict[str, Any]]] = []
         for source in by_user.get(target["user_id"], []):
             if not source["time"] or source["time"] >= target["time"] or source["task_id"] == target["task_id"]:
@@ -812,9 +828,17 @@ def build_retrieval_candidate_pools(
             )
             same_intent_family = class_match or (specific_app_match and similarity >= 0.35)
             if same_intent_family and similarity >= min_same_user_similarity:
-                same_similar.append((0.65 * similarity + 0.20 * scenario + 0.15 * hour, source))
+                eligibility = (
+                    "listwise"
+                    if similarity >= positive_same_user_similarity
+                    else "review_required_zero_mass"
+                )
+                same_similar.append((0.65 * similarity + 0.20 * scenario + 0.15 * hour, source, eligibility))
             elif not class_match and not specific_app_match and (scenario > 0.0 or hour >= 0.75):
-                same_context.append((0.15 * similarity + 0.55 * scenario + 0.30 * hour, source))
+                if similarity >= max_context_similarity:
+                    exclusions["context_pseudo_negative_risk"] += 1
+                else:
+                    same_context.append((0.15 * similarity + 0.55 * scenario + 0.30 * hour, source))
             elif same_intent_family:
                 exclusions["same_user_similarity_below_threshold"] += 1
 
@@ -851,7 +875,10 @@ def build_retrieval_candidate_pools(
             )
             cross_similar.append((score, source, eligibility))
 
-        same_similar.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
+        same_similar.sort(
+            key=lambda item: (item[2] == "listwise", item[0], item[1]["time"], item[1]["task_id"]),
+            reverse=True,
+        )
         same_context.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
         cross_similar.sort(key=lambda item: (item[0], item[1]["time"], item[1]["task_id"]), reverse=True)
         candidates: dict[str, list[dict[str, Any]]] = {
@@ -864,8 +891,14 @@ def build_retrieval_candidate_pools(
             (
                 "same_user_similar_intent",
                 (
-                    _retrieval_candidate(target, source, "same_user_similar_intent", score, eligibility="listwise")
-                    for score, source in same_similar
+                    _retrieval_candidate(
+                        target,
+                        source,
+                        "same_user_similar_intent",
+                        score,
+                        eligibility=eligibility,
+                    )
+                    for score, source, eligibility in same_similar
                 ),
             ),
             (
@@ -954,6 +987,25 @@ def _synthetic_negative(target: str) -> str:
     return f"先询问用户是否需要{target.rstrip('。')}"
 
 
+def _target_history_recurrence(target: str, history: list[Any]) -> dict[str, Any]:
+    target_key = normalize_text(target)
+    history_items = [item for item in history if isinstance(item, dict)]
+    normalized = [(item, normalize_text(item.get("intent"))) for item in history_items]
+    exact = [item for item, key in normalized if target_key and key == target_key]
+    substring = [
+        item
+        for item, key in normalized
+        if target_key and key and (target_key in key or key in target_key)
+    ]
+    return {
+        "normalized_exact": bool(exact),
+        "substring_overlap": bool(substring),
+        "exact_match_count": len(exact),
+        "substring_match_count": len(substring),
+        "exact_match_episode_ids": [str(item.get("episode_id") or "") for item in exact],
+    }
+
+
 def build_groups(
     tasks: list[dict[str, Any]],
     *,
@@ -974,13 +1026,16 @@ def build_groups(
         target = task.get("target") if isinstance(task.get("target"), dict) else {}
         metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
         target_text = str(target.get("intent") or "").strip()
-        history_text = {normalize_text(item.get("intent")) for item in inputs.get("previous_intents", []) if isinstance(item, dict)}
+        history = inputs.get("previous_intents", []) if isinstance(inputs.get("previous_intents"), list) else []
+        history_text = {normalize_text(item.get("intent")) for item in history if isinstance(item, dict)}
+        history_recurrence = _target_history_recurrence(target_text, history)
         candidate_specs: list[dict[str, Any]] = [{"text": target_text, "source": "oracle_target"}]
         retrieval = (retrieval_candidates or {}).get(task_id, {})
         for source_name in ("same_user_similar_intent", "same_user_similar_context_different_intent"):
             values = retrieval.get(source_name) or []
             if values:
-                candidate_specs.append(dict(values[0]))
+                selected = next((item for item in values if item.get("eligibility") == "listwise"), values[0])
+                candidate_specs.append(dict(selected))
         if model_candidates is not None:
             for text in model_candidates.get(task_id, []):
                 key = normalize_text(text)
@@ -993,7 +1048,11 @@ def build_groups(
                 if len(candidate_specs) >= 4:
                     break
         positive_alternative_sources = {"same_user_similar_intent", "ui_tars_sft", "synthetic_smoke"}
-        if synthetic_smoke and not any(spec.get("source") in positive_alternative_sources for spec in candidate_specs):
+        if synthetic_smoke and not any(
+            spec.get("source") in positive_alternative_sources
+            and spec.get("eligibility", "listwise") == "listwise"
+            for spec in candidate_specs
+        ):
             candidate_specs.append({"text": _synthetic_negative(target_text), "source": "synthetic_smoke"})
         seen: set[str] = set()
         candidates: list[dict[str, Any]] = []
@@ -1030,7 +1089,7 @@ def build_groups(
         candidates.sort(
             key=lambda item: (
                 item["source"] != "oracle_target",
-                item["metadata"].get("eligibility") == "contrast_only_zero_mass",
+                item["metadata"].get("eligibility") != "listwise",
                 -item["reward"]["total"],
             )
         )
@@ -1038,7 +1097,7 @@ def build_groups(
         positive_non_oracle_indices = [
             index
             for index, item in enumerate(candidates)
-            if index != oracle_index and item["metadata"].get("eligibility") != "contrast_only_zero_mass"
+            if index != oracle_index and item["metadata"].get("eligibility") == "listwise"
         ]
         effective_oracle_probability = oracle_probability if positive_non_oracle_indices else 1.0
         non_oracle_total = sum(
@@ -1085,6 +1144,7 @@ def build_groups(
                     "user_id": inputs.get("user_id"),
                     "intent_class": target.get("intent_class"),
                     "target_app": target.get("app"),
+                    "target_history_recurrence": history_recurrence,
                     "oracle_text_sha256": hashlib.sha256(target_text.encode("utf-8")).hexdigest(),
                     "target_identity_sha256": sha256_json(
                         [inputs.get("user_id"), inputs.get("time"), normalize_text(target_text)]

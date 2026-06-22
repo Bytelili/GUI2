@@ -74,6 +74,7 @@ def audit_v4_groups(
     cross_user_rejected_count = 0
     cross_user_analysis_count = 0
     split_oracle_hashes: dict[str, set[str]] = {"train": set(), "eval": set()}
+    history_recurrence_counts: dict[str, Counter[str]] = {"train": Counter(), "eval": Counter()}
 
     def add(severity: str, category: str, split: str, group_id: str, detail: str, candidate_id: str = "") -> None:
         issue = V4Issue(severity, category, split, group_id, candidate_id, detail)
@@ -105,6 +106,15 @@ def audit_v4_groups(
                 add("block", "forbidden_target_split", split, group_id, str(metadata.get("target_split")))
             if metadata.get("history_policy") != "same_user_strictly_before_target_time":
                 add("block", "invalid_history_policy", split, group_id, str(metadata.get("history_policy")))
+            history_recurrence = metadata.get("target_history_recurrence")
+            if not isinstance(history_recurrence, dict):
+                add("block", "missing_history_recurrence", split, group_id, "target_history_recurrence is required")
+            else:
+                for field in ("normalized_exact", "substring_overlap"):
+                    if not isinstance(history_recurrence.get(field), bool):
+                        add("block", "invalid_history_recurrence", split, group_id, f"{field} must be boolean")
+                    elif history_recurrence[field]:
+                        history_recurrence_counts[split][field] += 1
             oracle_hash = str(metadata.get("target_identity_sha256") or "")
             if not oracle_hash:
                 add("block", "missing_target_identity_hash", split, group_id, "target_identity_sha256 is required")
@@ -250,6 +260,7 @@ def audit_v4_groups(
                 if source == "same_user_similar_intent":
                     retrieval = candidate_metadata.get("retrieval") or {}
                     similarity = float(retrieval.get("semantic_similarity", 0.0))
+                    eligibility = candidate_metadata.get("eligibility")
                     class_match = bool(
                         metadata.get("intent_class")
                         and candidate_metadata.get("source_intent_class") == metadata.get("intent_class")
@@ -262,9 +273,35 @@ def audit_v4_groups(
                     )
                     if similarity < 0.20 or not (class_match or app_match):
                         add("block", "weak_same_user_intent_candidate", split, group_id, f"similarity={similarity:.6f}", candidate_id)
+                    if eligibility == "listwise" and similarity < 0.35:
+                        add("block", "weak_same_user_positive_mass", split, group_id, f"similarity={similarity:.6f}", candidate_id)
+                    elif eligibility == "review_required_zero_mass":
+                        if probs[index] != 0.0 or similarity >= 0.35:
+                            add(
+                                "block",
+                                "invalid_same_user_review_candidate",
+                                split,
+                                group_id,
+                                f"similarity={similarity:.6f}, probability={probs[index]:.6f}",
+                                candidate_id,
+                            )
+                    elif eligibility != "listwise":
+                        add("block", "invalid_same_user_eligibility", split, group_id, str(eligibility), candidate_id)
                 if source == "same_user_similar_context_different_intent":
+                    retrieval = candidate_metadata.get("retrieval") or {}
+                    similarity = float(retrieval.get("semantic_similarity", 0.0))
                     if candidate_metadata.get("eligibility") != "contrast_only_zero_mass" or probs[index] != 0.0:
                         add("block", "context_contrast_has_positive_mass", split, group_id, f"probability={probs[index]:.6f}", candidate_id)
+                    if similarity >= 0.75:
+                        add("block", "context_pseudo_negative_risk", split, group_id, f"similarity={similarity:.6f}", candidate_id)
+                    if candidate_metadata.get("source_intent_class") == metadata.get("intent_class"):
+                        add("block", "context_intent_class_match", split, group_id, str(metadata.get("intent_class")), candidate_id)
+                if (
+                    index != actual_oracle
+                    and candidate_metadata.get("eligibility") != "listwise"
+                    and probs[index] != 0.0
+                ):
+                    add("block", "ineligible_candidate_has_positive_mass", split, group_id, f"probability={probs[index]:.6f}", candidate_id)
                 if candidate_metadata.get("rank") != expected_ranks[index]:
                     add("block", "rank_probability_mismatch", split, group_id, f"candidate rank != {expected_ranks[index]}", candidate_id)
                 try:
@@ -330,6 +367,17 @@ def audit_v4_groups(
         "image_policy": "unavailable paths retained" if allow_unavailable_images else "all images required locally",
         "train_eval_task_overlap_count": len(overlap),
         "train_eval_target_overlap_count": len(target_overlap),
+        "history_recurrence": {
+            split: {
+                "normalized_exact_task_count": history_recurrence_counts[split]["normalized_exact"],
+                "normalized_exact_task_rate": history_recurrence_counts[split]["normalized_exact"]
+                / max(len(groups), 1),
+                "substring_overlap_task_count": history_recurrence_counts[split]["substring_overlap"],
+                "substring_overlap_task_rate": history_recurrence_counts[split]["substring_overlap"]
+                / max(len(groups), 1),
+            }
+            for split, groups in (("train", train_groups), ("eval", eval_groups))
+        },
         "top_answers": [{"text": text, "count": count} for text, count in answer_counts.most_common(20)],
     }
     return report, issues

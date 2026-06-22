@@ -8,8 +8,11 @@ Listwise-v4 is a new, isolated FingerTip-20K proactive-suggestion path. It does 
 - All generated data goes to an external workspace. No command defaults to `LLaMA-Factory/data/papo`.
 - Git contains code, schema, tests, templates, and synthetic fixtures only.
 - Candidate generation is two-stage. Stage A emits target-free requests; Stage B validates externally generated UI-TARS/SFT results and their SHA256/provenance.
-- Retrieval candidates are built locally from strict-train references: same-user/similar-intent and same-user/similar-context candidates may enter Listwise after prompt-copy filtering; cross-user similar-intent candidates are isolated as analysis or future DPO rejected records with zero Listwise mass.
+- Retrieval candidates are built locally from strict-train references. Text identity uses Unicode NFKC, case folding, and removal of whitespace/punctuation, so punctuation-only oracle or history copies cannot survive deduplication.
+- Same-user/similar-intent candidates require similarity `>= 0.35` for positive Listwise mass. Candidates in `[0.20, 0.35)` remain available as `review_required_zero_mass` records but cannot become positive labels automatically.
+- Same-user/similar-context-but-different-intent candidates are rejected when similarity is `>= 0.75`; retained context contrasts always have zero target mass. Cross-user similar-intent candidates are isolated as analysis or future reviewed DPO records with zero Listwise mass.
 - The oracle receives 0.90 target mass by default. Same-user/similar-context-but-different-intent candidates remain in the grouped softmax with exactly zero target mass, so raising their model score increases loss instead of teaching them as answers.
+- Every group and source manifest records normalized target recurrence in previous history. Quality reports expose exact and substring recurrence rates so repeated-history and novel-intent evaluation can be reported separately.
 - Without imported formal candidates, only `synthetic_smoke_not_for_formal_training` releases can be built. The trainer rejects that release status.
 - DPO remains out of scope until a formal v4 smoke run beats the unchanged SFT strict-holdout baseline.
 
@@ -20,6 +23,8 @@ Run scripts 22 through 27 with explicit `--train-tasks`, `--eval-tasks`, and `--
 Script 28 is the server registration boundary. It verifies `SHA256SUMS.txt`, refuses a synthetic release unless explicitly allowed for format-only smoke checks, copies only v4 artifacts, and merges only the two new v4 dataset entries while preserving v2/v3.
 
 Script 29 independently materializes the three causal retrieval pools and reports coverage. Eval retrieval uses strict train tasks only and never reads eval targets as references for another eval task.
+
+The retrieval safety thresholds can be supplied explicitly with `--min-same-user-similarity`, `--positive-same-user-similarity`, and `--max-context-similarity`. The defaults are `0.20`, `0.35`, and `0.75`; formal builds should record any override in their report and review it before release.
 
 The synthetic acceptance path is:
 

@@ -19,6 +19,7 @@ from src.papo.proactive_listwise_v4 import (
     dataset_info_v4,
     import_candidate_results,
     merge_candidate_shards,
+    normalize_text,
     read_jsonl,
     retrieval_pool_map,
     sha256_file,
@@ -242,6 +243,67 @@ class ProactiveListwiseV4PipelineTest(unittest.TestCase):
         rejected = groups[0]["metadata"]["dpo_rejected_candidates"]
         analysis = groups[0]["metadata"]["cross_user_analysis_candidates"]
         self.assertEqual(len(rejected) + len(analysis), 1)
+
+    def test_content_safety_normalization_weak_positive_and_false_negative_guard(self) -> None:
+        self.assertEqual(normalize_text("打开微信，“蓝牙开锁”！"), normalize_text("打开微信蓝牙开锁"))
+
+        target = _task("target-safe", "train", "u1", "20260210_100000", self.image, "打开华为阅读，查看上新推荐")
+        target["target"]["intent_class"] = "阅读"
+        weak = _task("weak", "train", "u1", "20260201_090000", self.image, "打开扇贝阅读英文短文")
+        weak["target"]["intent_class"] = "阅读"
+        duplicate = _task("duplicate", "train", "u1", "20260202_090000", self.image, "打开华为阅读查看上新推荐！")
+        duplicate["target"]["intent_class"] = "其他"
+        near_false_negative = _task(
+            "near-false-negative",
+            "train",
+            "u1",
+            "20260203_100000",
+            self.image,
+            "打开华为阅读，查看上新推荐。",
+        )
+        near_false_negative["target"]["intent_class"] = "应用管理"
+        rows = build_retrieval_candidate_pools(
+            [target],
+            [target, weak, duplicate, near_false_negative],
+            split="train",
+            max_per_type=4,
+        )
+        pool = rows[0]
+        similar = pool["candidates"]["same_user_similar_intent"]
+        context = pool["candidates"]["same_user_similar_context_different_intent"]
+        self.assertEqual([item["source_task_id"] for item in similar], ["weak"])
+        self.assertEqual(similar[0]["eligibility"], "review_required_zero_mass")
+        self.assertFalse(context)
+        self.assertGreaterEqual(pool["exclusion_counts"]["oracle_text_duplicate"], 2)
+
+        groups = build_groups(
+            [target],
+            split="train",
+            model_candidates=None,
+            retrieval_candidates=retrieval_pool_map(rows),
+            synthetic_smoke=True,
+        )
+        by_source = {item["source"]: index for index, item in enumerate(groups[0]["candidates"])}
+        weak_index = by_source["same_user_similar_intent"]
+        self.assertEqual(groups[0]["target_distribution"][weak_index], 0.0)
+        self.assertIn("synthetic_smoke", by_source)
+
+    def test_history_recurrence_metadata_and_normalized_duplicate_gate(self) -> None:
+        repeated = _task("repeated", "train", "u1", "20260210_100000", self.image, "打开微信，蓝牙开锁")
+        repeated["input"]["previous_intents"][0]["intent"] = "打开微信蓝牙开锁！"
+        group = build_groups([repeated], split="train", model_candidates=None, synthetic_smoke=True)[0]
+        recurrence = group["metadata"]["target_history_recurrence"]
+        self.assertTrue(recurrence["normalized_exact"])
+        self.assertEqual(recurrence["exact_match_count"], 1)
+
+        duplicate = dict(group["candidates"][1])
+        duplicate["text"] = "打开微信蓝牙开锁。"
+        duplicate["candidate_id"] = "a" * 24
+        group["candidates"].append(duplicate)
+        group["target_distribution"].append(0.0)
+        quality, issues = audit_v4_groups([group], [])
+        self.assertEqual(quality["status"], "failed")
+        self.assertIn("duplicate_or_empty_candidate", {issue.category for issue in issues})
 
     def test_manual_review_schema_gate_release_and_hashes(self) -> None:
         source_manifest = audit_source_tasks(self.train_path, self.eval_path, self.workspace)
