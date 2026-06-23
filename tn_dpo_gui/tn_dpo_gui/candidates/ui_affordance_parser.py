@@ -9,7 +9,11 @@ ROLE_PATTERN = re.compile(r"(button|clickable|link|tab|checkbox|input|search|tex
 TOKEN_PATTERN = re.compile(r"([A-Za-z0-9][A-Za-z0-9 _-]{1,40})")
 
 
-def extract_affordance_actions(ui_tree: str | None, max_actions: int = 6) -> list[Action]:
+def extract_affordance_actions(
+    ui_tree: str | None,
+    max_actions: int = 6,
+    preferred_type_text: str | None = None,
+) -> list[Action]:
     if not ui_tree:
         return []
     candidates: list[Action] = []
@@ -21,7 +25,7 @@ def extract_affordance_actions(ui_tree: str | None, max_actions: int = 6) -> lis
         target = token_match.group(1).strip() if token_match else line[:40]
         lowered = line.lower()
         if any(keyword in lowered for keyword in ["input", "textbox", "search"]):
-            candidates.append(Action(action_type="type", target=target, text="example query"))
+            candidates.append(Action(action_type="type", target=target, text=preferred_type_text or None))
         else:
             candidates.append(Action(action_type="click", target=target))
         if "scroll" in lowered:
