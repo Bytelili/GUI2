@@ -45,11 +45,15 @@ tf32: true
 # above the observed preprocessing wall time.
 ddp_timeout: 21600
 logging_steps: 10
-eval_strategy: epoch
+eval_strategy: steps
 eval_on_start: false
-save_strategy: epoch
+eval_steps: 400
+save_strategy: steps
+save_steps: 400
 save_total_limit: null
-load_best_model_at_end: false
+load_best_model_at_end: true
+metric_for_best_model: eval_loss
+greater_is_better: false
 report_to: tensorboard
 plot_loss: true
 seed: 20260622
