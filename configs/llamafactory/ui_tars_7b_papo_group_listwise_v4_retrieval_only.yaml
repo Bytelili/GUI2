@@ -11,11 +11,14 @@ eval_dataset: papo_proactive_eval_listwise_v4
 template: qwen2_vl
 cutoff_len: 4096
 packing: false
-overwrite_cache: true
-# Grouped v4 retrieval-only preprocessing has shown post-tokenizer stalls under
-# high multiprocessing fan-out, so keep the pipeline conservative here.
-preprocessing_num_workers: 1
-dataloader_num_workers: 2
+# Reuse the tokenizer cache across restarts so recovery runs do not pay the
+# full multimodal preprocessing cost again.
+overwrite_cache: false
+# One worker is too slow for the grouped multimodal tokenizer on the full
+# retrieval-only release. Use a moderate fan-out that speeds preprocessing up
+# without going back to the most aggressive settings that previously stalled.
+preprocessing_num_workers: 8
+dataloader_num_workers: 4
 use_papo_listwise: false
 use_papo_group_listwise: true
 papo_group_model_temperature: 1.0
@@ -35,7 +38,10 @@ lr_scheduler_type: cosine
 warmup_ratio: 0.05
 bf16: true
 tf32: true
-ddp_timeout: 7200
+# Rank 0 performs long grouped multimodal tokenization before other ranks can
+# leave the main_process_first barrier, so keep the NCCL watchdog comfortably
+# above the observed preprocessing wall time.
+ddp_timeout: 21600
 logging_steps: 5
 eval_strategy: steps
 eval_on_start: true
