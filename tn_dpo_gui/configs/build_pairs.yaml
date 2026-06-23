@@ -1,6 +1,6 @@
 main_project:
   enabled: true
-  root_config: ../config.yaml
+  root_config: ../../config.yaml
 
 input:
   steps_path: auto

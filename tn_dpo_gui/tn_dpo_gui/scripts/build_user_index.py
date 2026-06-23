@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from tn_dpo_gui.data.dataset import load_trajectory_records
 from tn_dpo_gui.retrieval.user_history_index import UserHistoryIndex
-from tn_dpo_gui.utils.io import ensure_dir
+from tn_dpo_gui.utils.io import ensure_dir, write_json
 from tn_dpo_gui.utils.main_project import derive_tn_dpo_layout
+from tn_dpo_gui.utils.provenance import runtime_provenance
 
-from . import resolve_path
+from . import PROJECT_ROOT, resolve_path
 
 
 def main() -> None:
@@ -29,7 +31,16 @@ def main() -> None:
     index = UserHistoryIndex.build(trajectories)
     ensure_dir(output_path.parent)
     index.save(output_path)
-    print({"users": len(index.users()), "output": str(output_path)})
+    summary = {
+        "users": len(index.users()),
+        "trajectories_path": str(trajectories_path),
+        "output": str(output_path),
+        "provenance": runtime_provenance(PROJECT_ROOT),
+    }
+    if args.root_config:
+        summary["root_config_path"] = str(resolve_path(args.root_config))
+    write_json(Path(output_path).with_name(Path(output_path).stem + "_summary.json"), summary)
+    print(summary)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from tn_dpo_gui.evaluation.eval_offline import evaluate_ranker
 from tn_dpo_gui.evaluation.eval_projection import evaluate_projection
 from tn_dpo_gui.utils.config import export_config, load_config
 from tn_dpo_gui.utils.io import write_json
+from tn_dpo_gui.utils.provenance import runtime_provenance
 
 from . import PROJECT_ROOT, apply_main_project_layout, override_main_project_root_config, resolve_config_paths
 
@@ -58,6 +59,7 @@ def main() -> None:
     }
     if config.get("_config_path"):
         report["config_path"] = config["_config_path"]
+    report["provenance"] = runtime_provenance(PROJECT_ROOT)
     write_json(config["output"]["report_path"], report)
     write_json(Path(config["output"]["report_path"]).with_name("resolved_config.json"), export_config(config))
     print(report)

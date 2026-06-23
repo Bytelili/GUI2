@@ -53,7 +53,7 @@ def resolve_config_paths(config: dict, mapping: dict[str, list[str]]) -> dict:
 
 def override_main_project_root_config(config: dict, root_config: str | None) -> dict:
     if root_config:
-        config.setdefault("main_project", {})["root_config"] = root_config
+        config.setdefault("main_project", {})["root_config"] = path_to_string(resolve_path(root_config))
     return config
 
 

@@ -7,8 +7,9 @@ from tn_dpo_gui.data.action_schema import Action
 from tn_dpo_gui.data.main_project_adapter import convert_main_project_artifacts
 from tn_dpo_gui.data.dataset import load_step_examples, load_trajectory_records, save_step_examples, save_trajectory_records
 from tn_dpo_gui.data.schema import GUIStepExample, TrajectoryRecord
-from tn_dpo_gui.utils.io import ensure_dir, read_json, read_jsonl
+from tn_dpo_gui.utils.io import ensure_dir, read_json, read_jsonl, write_json
 from tn_dpo_gui.utils.main_project import derive_tn_dpo_layout, validate_integration_inputs
+from tn_dpo_gui.utils.provenance import runtime_provenance
 
 from . import PROJECT_ROOT, resolve_path
 
@@ -236,13 +237,12 @@ def preprocess(
     else:
         raise ValueError("Provide both --raw-steps and --raw-trajectories, or provide neither to use main-project mode.")
 
+    summary["provenance"] = runtime_provenance(PROJECT_ROOT)
     step_path = output_dir / "steps.jsonl"
     trajectory_path = output_dir / "trajectories.jsonl"
     summary_path = output_dir / "summary.json"
     save_step_examples(step_path, examples)
     save_trajectory_records(trajectory_path, trajectories)
-    from tn_dpo_gui.utils.io import write_json
-
     write_json(summary_path, summary)
     return {"steps_path": str(step_path), "trajectories_path": str(trajectory_path), "summary_path": str(summary_path)}
 

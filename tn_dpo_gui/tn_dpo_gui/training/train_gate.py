@@ -13,6 +13,7 @@ from tn_dpo_gui.models.gate import CapacityGate
 from tn_dpo_gui.pair_builder.pair_dataset import GateStateDataset, load_pairs
 from tn_dpo_gui.utils.io import write_json
 from tn_dpo_gui.utils.logging import get_logger
+from tn_dpo_gui.utils.provenance import runtime_provenance
 from tn_dpo_gui.utils.seed import set_seed
 
 from .trainer_utils import AverageMeter, SimpleAdam, save_checkpoint, select_device
@@ -94,6 +95,8 @@ def train_gate(config: dict) -> dict:
             "splits": sorted(allowed_splits),
         }
     )
+    if config.get("_config_path"):
+        metrics["config_path"] = config["_config_path"]
     checkpoint = {
         "model_state": model.state_dict(),
         "encoder_config": encoder.get_config(),
@@ -105,6 +108,9 @@ def train_gate(config: dict) -> dict:
             "splits": sorted(allowed_splits),
         },
         "base_model_path": str(config["training"].get("base_model_path", "")),
+        "data_path": str(pair_path),
+        "config_path": config.get("_config_path"),
+        "provenance": runtime_provenance(output_dir),
         "metrics": metrics,
     }
     save_checkpoint(output_dir / "gate.pt", checkpoint)
