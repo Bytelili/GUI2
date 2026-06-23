@@ -10,15 +10,17 @@ from tn_dpo_gui.retrieval.user_history_index import UserHistoryIndex
 from tn_dpo_gui.utils.config import load_config
 from tn_dpo_gui.utils.io import write_json, write_jsonl
 
-from . import PROJECT_ROOT, apply_main_project_layout, resolve_config_paths
+from . import PROJECT_ROOT, apply_main_project_layout, override_main_project_root_config, resolve_config_paths
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build Task-Nullspace DPO preference pairs.")
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "build_pairs.yaml"))
+    parser.add_argument("--root-config", default="")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    config = override_main_project_root_config(config, args.root_config)
     config = apply_main_project_layout(
         config,
         {

@@ -8,15 +8,17 @@ from tn_dpo_gui.evaluation.eval_projection import evaluate_projection
 from tn_dpo_gui.utils.config import load_config
 from tn_dpo_gui.utils.io import write_json
 
-from . import PROJECT_ROOT, apply_main_project_layout, resolve_config_paths
+from . import PROJECT_ROOT, apply_main_project_layout, override_main_project_root_config, resolve_config_paths
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run offline evaluation for TN-DPO artifacts.")
     parser.add_argument("--config", default=str(PROJECT_ROOT / "configs" / "eval.yaml"))
+    parser.add_argument("--root-config", default="")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    config = override_main_project_root_config(config, args.root_config)
     config = apply_main_project_layout(
         config,
         {

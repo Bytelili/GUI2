@@ -13,7 +13,7 @@ function Run-Step {
 
 Run-Step "python -m tn_dpo_gui.scripts.preprocess_data --root-config `"$RootConfig`""
 Run-Step "python -m tn_dpo_gui.scripts.build_user_index --root-config `"$RootConfig`""
-Run-Step "python -m tn_dpo_gui.scripts.build_pairs --config configs/build_pairs.yaml"
-Run-Step "python -m tn_dpo_gui.scripts.train_ranker --config configs/train_ranker.yaml"
-Run-Step "python -m tn_dpo_gui.scripts.train_gate --config configs/train_gate.yaml"
-Run-Step "python -m tn_dpo_gui.scripts.eval --config configs/eval.yaml"
+Run-Step "python -m tn_dpo_gui.scripts.build_pairs --config configs/build_pairs.yaml --root-config `"$RootConfig`""
+Run-Step "python -m tn_dpo_gui.scripts.train_ranker --config configs/train_ranker.yaml --root-config `"$RootConfig`""
+Run-Step "python -m tn_dpo_gui.scripts.train_gate --config configs/train_gate.yaml --root-config `"$RootConfig`""
+Run-Step "python -m tn_dpo_gui.scripts.eval --config configs/eval.yaml --root-config `"$RootConfig`""
