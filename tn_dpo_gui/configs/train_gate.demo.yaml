@@ -1,7 +1,7 @@
 seed: 7
 
 data:
-  pairs_path: artifacts/pairs/pairs.jsonl
+  pairs_path: ../artifacts/pairs/pairs.jsonl
   splits:
     - train
 
@@ -23,4 +23,4 @@ training:
   max_candidates: 8
 
 output:
-  dir: artifacts/gate
+  dir: ../artifacts/gate

@@ -1,7 +1,7 @@
 seed: 7
 
 data:
-  pairs_path: artifacts/pairs/pairs.jsonl
+  pairs_path: ../artifacts/pairs/pairs.jsonl
   splits:
     - train
 
@@ -20,4 +20,4 @@ training:
   beta: 1.0
 
 output:
-  dir: artifacts/ranker
+  dir: ../artifacts/ranker

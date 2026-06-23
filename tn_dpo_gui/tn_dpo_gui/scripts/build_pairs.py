@@ -7,7 +7,7 @@ from pathlib import Path
 from tn_dpo_gui.data.dataset import load_step_examples, load_trajectory_records
 from tn_dpo_gui.pair_builder.pair_builder import TNDPOPairBuilder
 from tn_dpo_gui.retrieval.user_history_index import UserHistoryIndex
-from tn_dpo_gui.utils.config import load_config
+from tn_dpo_gui.utils.config import export_config, load_config
 from tn_dpo_gui.utils.io import write_json, write_jsonl
 
 from . import PROJECT_ROOT, apply_main_project_layout, override_main_project_root_config, resolve_config_paths
@@ -69,7 +69,10 @@ def main() -> None:
     }
     if config.get("_main_project_layout"):
         summary["main_project_layout"] = config["_main_project_layout"]
+    if config.get("_config_path"):
+        summary["config_path"] = config["_config_path"]
     write_json(config["output"]["summary_path"], summary)
+    write_json(Path(config["output"]["summary_path"]).with_name("resolved_config.json"), export_config(config))
     print(summary)
 
 

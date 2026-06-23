@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from tn_dpo_gui.evaluation.eval_gate import evaluate_gate
 from tn_dpo_gui.evaluation.eval_offline import evaluate_ranker
 from tn_dpo_gui.evaluation.eval_projection import evaluate_projection
-from tn_dpo_gui.utils.config import load_config
+from tn_dpo_gui.utils.config import export_config, load_config
 from tn_dpo_gui.utils.io import write_json
 
 from . import PROJECT_ROOT, apply_main_project_layout, override_main_project_root_config, resolve_config_paths
@@ -55,7 +56,10 @@ def main() -> None:
         ),
         "projection": evaluate_projection(config["data"]["pairs_path"], allowed_splits=allowed_splits),
     }
+    if config.get("_config_path"):
+        report["config_path"] = config["_config_path"]
     write_json(config["output"]["report_path"], report)
+    write_json(Path(config["output"]["report_path"]).with_name("resolved_config.json"), export_config(config))
     print(report)
 
 

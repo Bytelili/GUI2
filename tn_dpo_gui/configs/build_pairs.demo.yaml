@@ -1,11 +1,11 @@
 input:
-  steps_path: data/demo/steps.jsonl
-  trajectories_path: data/demo/trajectories.jsonl
-  history_index_path: data/demo/user_index.json
+  steps_path: ../data/demo/steps.jsonl
+  trajectories_path: ../data/demo/trajectories.jsonl
+  history_index_path: ../data/demo/user_index.json
 
 output:
-  pairs_path: artifacts/pairs/pairs.jsonl
-  summary_path: artifacts/pairs/summary.json
+  pairs_path: ../artifacts/pairs/pairs.jsonl
+  summary_path: ../artifacts/pairs/summary.json
 
 encoder:
   dim: 256

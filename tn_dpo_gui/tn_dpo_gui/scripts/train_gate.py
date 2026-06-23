@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 from tn_dpo_gui.training.train_gate import train_gate
-from tn_dpo_gui.utils.config import load_config
+from tn_dpo_gui.utils.config import export_config, load_config
+from tn_dpo_gui.utils.io import write_json
 
 from . import PROJECT_ROOT, apply_main_project_layout, override_main_project_root_config, resolve_config_paths
 
@@ -26,6 +28,7 @@ def main() -> None:
     if config.get("_main_project_layout") and not config.get("training", {}).get("base_model_path"):
         config.setdefault("training", {})["base_model_path"] = config["_main_project_layout"]["model_name_or_path"]
     config = resolve_config_paths(config, {"data": ["pairs_path"], "output": ["dir"]})
+    write_json(Path(config["output"]["dir"]) / "resolved_config.json", export_config(config))
     metrics = train_gate(config)
     print(metrics)
 

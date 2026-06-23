@@ -12,7 +12,11 @@ ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
 def load_config(path: str | Path) -> dict[str, Any]:
-    return _expand(read_yaml(path))
+    config_path = Path(path).resolve()
+    config = _expand(read_yaml(config_path))
+    config["_config_path"] = str(config_path)
+    config["_config_dir"] = str(config_path.parent)
+    return config
 
 
 def merge_overrides(base: dict[str, Any], overrides: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -25,6 +29,10 @@ def merge_overrides(base: dict[str, Any], overrides: dict[str, Any] | None = Non
         else:
             merged[key] = value
     return merged
+
+
+def export_config(config: dict[str, Any]) -> dict[str, Any]:
+    return deepcopy(config)
 
 
 def _expand(value: Any) -> Any:
