@@ -11,6 +11,7 @@ RUN_DIR="$PROJECT_ROOT/runs/papo/group_listwise_v4_retrieval_only_$RELEASE_ID"
 REPORT_DIR="$PROJECT_ROOT/reports/proactive/group_listwise_v4_retrieval_only_$RELEASE_ID"
 ACTION="${1:-status}"
 PROBE_CONFIG="$RUN_DIR/eval_probe.yaml"
+PROBE_REPORT_DIR="$REPORT_DIR/eval_batch_probe"
 
 cd "$PROJECT_ROOT"
 source server_env.sh
@@ -202,6 +203,186 @@ PY
   tail -n 120 "$log" || true
 }
 
+probe_eval_grid() {
+  if [[ "${SKIP_PREPARE:-0}" != "1" ]]; then
+    prepare
+  else
+    echo "SKIP_PREPARE=1 -> skipping re-audit, registration, preflight and unit tests."
+  fi
+  local active candidates batch log probe_output probe_logging probe_cfg
+  active="$(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader 2>/dev/null || true)"
+  if [[ -n "$active" && "${ALLOW_BUSY_GPUS:-0}" != "1" ]]; then
+    echo "ERROR: active GPU processes detected:" >&2
+    echo "$active" >&2
+    exit 1
+  fi
+  candidates="${EVAL_BATCH_CANDIDATES:-1 2 4}"
+  mkdir -p "$PROBE_REPORT_DIR"
+  : > "$PROBE_REPORT_DIR/probe_runs.jsonl"
+  export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+  export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+  for batch in $candidates; do
+    echo "===== Eval batch probe: $batch ====="
+    probe_cfg="$RUN_DIR/eval_probe_b${batch}.yaml"
+    probe_output="$OUTPUT/__eval_probe_b${batch}__"
+    probe_logging="$RUN_DIR/__eval_probe_b${batch}__"
+    rm -rf "$probe_output" "$probe_logging"
+    python - "$CONFIG" "$probe_cfg" "$probe_output" "$probe_logging" "$batch" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+probe_output = sys.argv[3]
+probe_logging = sys.argv[4]
+batch = int(sys.argv[5])
+
+cfg = yaml.safe_load(src.read_text(encoding="utf-8"))
+cfg.update({
+    "output_dir": probe_output,
+    "logging_dir": probe_logging,
+    "per_device_eval_batch_size": batch,
+    "max_steps": 1,
+    "eval_on_start": True,
+    "eval_strategy": "steps",
+    "eval_steps": 1,
+    "save_strategy": "steps",
+    "save_steps": 999999,
+    "load_best_model_at_end": False,
+    "plot_loss": False,
+})
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
+print(f"Wrote probe config: {dst}")
+print(f"per_device_eval_batch_size: {cfg.get('per_device_eval_batch_size')}")
+print(f"eval_on_start: {cfg.get('eval_on_start')}")
+print(f"max_steps: {cfg.get('max_steps')}")
+PY
+    log="$RUN_DIR/eval_probe_b${batch}_$(date +%Y%m%d_%H%M%S).log"
+    set +e
+    llamafactory-cli train "$probe_cfg" >"$log" 2>&1
+    status=$?
+    set -e
+    python - "$batch" "$status" "$log" "$probe_output" >> "$PROBE_REPORT_DIR/probe_runs.jsonl" <<'PY'
+from __future__ import annotations
+
+import ast
+import json
+import re
+import sys
+from pathlib import Path
+
+batch = int(sys.argv[1])
+exit_code = int(sys.argv[2])
+log_path = Path(sys.argv[3])
+output_dir = Path(sys.argv[4])
+text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.exists() else ""
+
+result = {
+    "batch": batch,
+    "exit_code": exit_code,
+    "log": str(log_path),
+    "output_dir": str(output_dir),
+    "status": "failed" if exit_code != 0 else "ok",
+    "oom": bool(re.search(r"out of memory|CUDA OOM", text, flags=re.IGNORECASE)),
+    "traceback": "Traceback (most recent call last)" in text,
+}
+
+trainer_states = sorted(output_dir.glob("**/trainer_state.json"))
+state = None
+if trainer_states:
+    try:
+        state = json.loads(trainer_states[-1].read_text(encoding="utf-8"))
+    except Exception:
+        state = None
+
+metrics = None
+if state:
+    for item in reversed(list(state.get("log_history") or [])):
+        if "eval_loss" in item:
+            metrics = item
+            break
+
+if metrics is None:
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith("{'eval_loss':"):
+            try:
+                metrics = ast.literal_eval(line)
+                break
+            except Exception:
+                pass
+
+if metrics:
+    result["eval_loss"] = metrics.get("eval_loss")
+    result["eval_runtime"] = metrics.get("eval_runtime")
+    result["eval_samples_per_second"] = metrics.get("eval_samples_per_second")
+    result["eval_steps_per_second"] = metrics.get("eval_steps_per_second")
+
+if result["oom"] or result["traceback"] or exit_code != 0:
+    result["status"] = "failed"
+elif metrics:
+    result["status"] = "passed"
+else:
+    result["status"] = "incomplete"
+
+print(json.dumps(result, ensure_ascii=False))
+PY
+    tail -n 60 "$log" || true
+  done
+  python - "$PROBE_REPORT_DIR/probe_runs.jsonl" "$PROBE_REPORT_DIR" <<'PY'
+from __future__ import annotations
+
+import json
+import math
+import sys
+from pathlib import Path
+
+jsonl = Path(sys.argv[1])
+report_dir = Path(sys.argv[2])
+runs = [json.loads(line) for line in jsonl.read_text(encoding="utf-8").splitlines() if line.strip()]
+passed = [run for run in runs if run.get("status") == "passed" and run.get("eval_samples_per_second") is not None]
+best = None
+if passed:
+    best = max(
+        passed,
+        key=lambda run: (
+            float(run.get("eval_samples_per_second") or 0.0),
+            int(run.get("batch") or 0),
+        ),
+    )
+report = {
+    "status": "passed" if best else "failed",
+    "candidates": runs,
+    "recommended_batch": best.get("batch") if best else None,
+    "recommended_by": "highest eval_samples_per_second among successful runs; ties broken by larger batch",
+    "recommended_metrics": best,
+}
+report_dir.mkdir(parents=True, exist_ok=True)
+(report_dir / "probe_summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+lines = [
+    "# Eval Batch Probe Summary",
+    "",
+    f"- Recommended batch: `{report['recommended_batch']}`",
+    f"- Rule: {report['recommended_by']}",
+    "",
+    "| batch | status | exit_code | oom | eval_runtime | eval_samples_per_second | eval_steps_per_second | eval_loss |",
+    "| ---: | --- | ---: | --- | ---: | ---: | ---: | ---: |",
+]
+for run in runs:
+    lines.append(
+        f"| {run.get('batch')} | {run.get('status')} | {run.get('exit_code')} | {run.get('oom')} | "
+        f"{run.get('eval_runtime')} | {run.get('eval_samples_per_second')} | "
+        f"{run.get('eval_steps_per_second')} | {run.get('eval_loss')} |"
+    )
+(report_dir / "probe_summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+print(json.dumps(report, ensure_ascii=False, indent=2))
+print(f"Written: {report_dir / 'probe_summary.json'}")
+print(f"Written: {report_dir / 'probe_summary.md'}")
+PY
+}
+
 status() {
   show_snapshot
 }
@@ -237,8 +418,9 @@ case "$ACTION" in
   prepare) prepare ;;
   train) train ;;
   probe_eval) probe_eval ;;
+  probe_eval_grid) probe_eval_grid ;;
   status) status ;;
   monitor) monitor ;;
   report) report ;;
-  *) echo "Usage: $0 {prepare|train|probe_eval|status|monitor|report}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {prepare|train|probe_eval|probe_eval_grid|status|monitor|report}" >&2; exit 2 ;;
 esac
