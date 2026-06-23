@@ -10,6 +10,7 @@ OUTPUT="$PROJECT_ROOT/LLaMA-Factory/saves/papo/ui_tars_7b_papo_group_listwise_v4
 RUN_DIR="$PROJECT_ROOT/runs/papo/group_listwise_v4_retrieval_only_$RELEASE_ID"
 REPORT_DIR="$PROJECT_ROOT/reports/proactive/group_listwise_v4_retrieval_only_$RELEASE_ID"
 ACTION="${1:-status}"
+PROBE_CONFIG="$RUN_DIR/eval_probe.yaml"
 
 cd "$PROJECT_ROOT"
 source server_env.sh
@@ -145,6 +146,62 @@ train() {
   tail -n 100 "$log" || true
 }
 
+probe_eval() {
+  if [[ "${SKIP_PREPARE:-0}" != "1" ]]; then
+    prepare
+  else
+    echo "SKIP_PREPARE=1 -> skipping re-audit, registration, preflight and unit tests."
+  fi
+  local active log pid probe_output probe_logging
+  active="$(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader 2>/dev/null || true)"
+  if [[ -n "$active" && "${ALLOW_BUSY_GPUS:-0}" != "1" ]]; then
+    echo "ERROR: active GPU processes detected:" >&2
+    echo "$active" >&2
+    exit 1
+  fi
+  probe_output="$OUTPUT/__eval_probe__"
+  probe_logging="$RUN_DIR/__eval_probe__"
+  python - "$CONFIG" "$PROBE_CONFIG" "$probe_output" "$probe_logging" <<'PY'
+from pathlib import Path
+import sys
+import yaml
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+probe_output = sys.argv[3]
+probe_logging = sys.argv[4]
+
+cfg = yaml.safe_load(src.read_text(encoding="utf-8"))
+cfg.update({
+    "output_dir": probe_output,
+    "logging_dir": probe_logging,
+    "max_steps": 1,
+    "eval_on_start": True,
+    "eval_strategy": "steps",
+    "eval_steps": 1,
+    "save_strategy": "steps",
+    "save_steps": 999999,
+    "load_best_model_at_end": False,
+})
+dst.parent.mkdir(parents=True, exist_ok=True)
+dst.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
+print(f"Wrote probe config: {dst}")
+print(f"per_device_eval_batch_size: {cfg.get('per_device_eval_batch_size')}")
+print(f"eval_on_start: {cfg.get('eval_on_start')}")
+print(f"max_steps: {cfg.get('max_steps')}")
+PY
+  log="$RUN_DIR/eval_probe_$(date +%Y%m%d_%H%M%S).log"
+  export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}"
+  export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+  nohup llamafactory-cli train "$PROBE_CONFIG" >"$log" 2>&1 &
+  pid=$!
+  echo "$pid" > "$RUN_DIR/eval_probe.pid"
+  echo "PID: $pid"
+  echo "Log: $log"
+  sleep 20
+  tail -n 120 "$log" || true
+}
+
 status() {
   show_snapshot
 }
@@ -179,8 +236,9 @@ report() {
 case "$ACTION" in
   prepare) prepare ;;
   train) train ;;
+  probe_eval) probe_eval ;;
   status) status ;;
   monitor) monitor ;;
   report) report ;;
-  *) echo "Usage: $0 {prepare|train|status|monitor|report}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {prepare|train|probe_eval|status|monitor|report}" >&2; exit 2 ;;
 esac
