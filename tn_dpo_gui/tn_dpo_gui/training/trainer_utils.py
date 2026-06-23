@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 
 import torch
+
+from tn_dpo_gui.utils.io import atomic_write_bytes
 
 
 def select_device(requested: str | None = None) -> torch.device:
@@ -14,7 +17,9 @@ def select_device(requested: str | None = None) -> torch.device:
 def save_checkpoint(path: str | Path, payload: dict) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(payload, target)
+    buffer = BytesIO()
+    torch.save(payload, buffer)
+    atomic_write_bytes(target, buffer.getvalue())
 
 
 def load_checkpoint(path: str | Path) -> dict:
