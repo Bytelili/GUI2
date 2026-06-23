@@ -20,6 +20,84 @@ latest_log() {
     | sort -nr | head -n 1 | cut -d' ' -f2-
 }
 
+show_snapshot() {
+  echo "===== Processes ====="
+  pgrep -af 'ui_tars_7b_papo_group_listwise_v4_retrieval_only|llamafactory|torchrun|launcher.py' || echo "No active retrieval-only process"
+  echo "===== GPUs ====="
+  nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv
+  local log
+  log="$(latest_log)"
+  if [[ -n "$log" ]]; then
+    echo "===== Log ====="
+    echo "$log"
+    python - "$log" <<'PY'
+import ast
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+progress = None
+train_metrics = None
+eval_metrics = None
+
+for line in reversed(lines):
+    stripped = line.strip()
+    if progress is None and re.search(r"\b\d+/\d+\s+\[", stripped):
+        progress = stripped
+    if train_metrics is None and stripped.startswith("{'loss':"):
+        try:
+            train_metrics = ast.literal_eval(stripped)
+        except Exception:
+            pass
+    if eval_metrics is None and stripped.startswith("{'eval_loss':"):
+        try:
+            eval_metrics = ast.literal_eval(stripped)
+        except Exception:
+            pass
+    if progress and train_metrics and eval_metrics:
+        break
+
+if progress:
+    print("===== Progress =====")
+    print(progress)
+
+if train_metrics:
+    print("===== Latest train metrics =====")
+    for key in [
+        "loss",
+        "grad_norm",
+        "learning_rate",
+        "papo_group_loss",
+        "papo_oracle_top1_accuracy",
+        "papo_oracle_margin",
+        "papo_target_entropy",
+        "papo_policy_entropy",
+        "epoch",
+    ]:
+        if key in train_metrics:
+            print(f"{key}: {train_metrics[key]}")
+
+if eval_metrics:
+    print("===== Latest eval metrics =====")
+    for key in [
+        "eval_loss",
+        "eval_runtime",
+        "eval_samples_per_second",
+        "eval_steps_per_second",
+        "epoch",
+    ]:
+        if key in eval_metrics:
+            print(f"{key}: {eval_metrics[key]}")
+PY
+    echo "===== Log tail ====="
+    tail -n 40 "$log"
+  else
+    echo "No training log yet"
+  fi
+}
+
 prepare() {
   test -f "$SOURCE_RELEASE/listwise_v4_manifest.json"
   python scripts/27_audit_proactive_listwise_v4.py \
@@ -64,16 +142,19 @@ train() {
 }
 
 status() {
-  pgrep -af 'ui_tars_7b_papo_group_listwise_v4_retrieval_only' || echo "No active retrieval-only process"
-  nvidia-smi --query-gpu=index,name,memory.used,memory.total,utilization.gpu --format=csv
-  local log
-  log="$(latest_log)"
-  if [[ -n "$log" ]]; then
-    echo "Log: $log"
-    tail -n 120 "$log"
-  else
-    echo "No training log yet"
-  fi
+  show_snapshot
+}
+
+monitor() {
+  local interval="${MONITOR_INTERVAL:-60}"
+  while pgrep -af "llamafactory.*$(basename "$CONFIG")" >/dev/null; do
+    date
+    show_snapshot
+    sleep "$interval"
+  done
+  date
+  echo "===== Training process exited; final snapshot ====="
+  show_snapshot
 }
 
 report() {
@@ -95,6 +176,7 @@ case "$ACTION" in
   prepare) prepare ;;
   train) train ;;
   status) status ;;
+  monitor) monitor ;;
   report) report ;;
-  *) echo "Usage: $0 {prepare|train|status|report}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {prepare|train|status|monitor|report}" >&2; exit 2 ;;
 esac
