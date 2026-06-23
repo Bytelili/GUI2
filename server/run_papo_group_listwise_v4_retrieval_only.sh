@@ -117,7 +117,11 @@ prepare() {
 }
 
 train() {
-  prepare
+  if [[ "${SKIP_PREPARE:-0}" != "1" ]]; then
+    prepare
+  else
+    echo "SKIP_PREPARE=1 -> skipping re-audit, registration, preflight and unit tests."
+  fi
   local active log pid
   active="$(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader 2>/dev/null || true)"
   if [[ -n "$active" && "${ALLOW_BUSY_GPUS:-0}" != "1" ]]; then
