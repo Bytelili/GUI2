@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from pathlib import Path
+import re
 from typing import Any
 
 from tn_dpo_gui.utils.io import read_jsonl
@@ -20,6 +21,7 @@ def convert_main_project_artifacts(
     eval_tasks = read_jsonl(eval_tasks_path)
     steps = read_jsonl(steps_path)
     steps_by_episode = _group_steps_by_episode(steps)
+    _validate_target_episode_coverage(train_tasks, eval_tasks, steps_by_episode)
 
     examples = _build_examples(train_tasks, steps_by_episode, split="train")
     examples.extend(_build_examples(eval_tasks, steps_by_episode, split="eval"))
@@ -40,9 +42,20 @@ def convert_main_project_artifacts(
     return examples, trajectories, summary
 
 
-def parse_action_label(label: str) -> Action:
+def parse_action_label(
+    label: str,
+    raw_action: str | None = None,
+    object_text: str | None = None,
+    object_role: str | None = None,
+) -> Action:
     normalized = str(label or "").strip()
     raw = {"label": normalized}
+    if raw_action:
+        raw["raw_action"] = str(raw_action)
+    if object_text:
+        raw["object_text"] = str(object_text)
+    if object_role:
+        raw["object_role"] = str(object_role)
     if not normalized:
         return Action(action_type="unknown", raw=raw)
     if normalized in {"finished", "finish"}:
@@ -54,11 +67,12 @@ def parse_action_label(label: str) -> Action:
     if normalized.startswith("navigate:"):
         return Action(action_type="click", target=normalized.split(":", 1)[1], raw=raw)
     if normalized.startswith("input:"):
-        target = normalized.split(":", 1)[1] or "TextField"
-        return Action(action_type="type", target=target, raw=raw)
+        target = normalized.split(":", 1)[1].strip() or str(object_role or "").strip() or "TextField"
+        text = _extract_input_text(raw_action)
+        return Action(action_type="type", target=target, text=text or None, raw=raw)
     if ":" in normalized:
         verb, target = normalized.split(":", 1)
-        target = target.strip()
+        target = target.strip() or str(object_text or "").strip() or str(object_role or "").strip()
         action_type = {
             "select": "click",
             "submit": "click",
@@ -80,39 +94,17 @@ def _build_examples(tasks: list[dict[str, Any]], steps_by_episode: dict[str, lis
         instruction = _task_instruction(task)
         task_id = stable_task_id(instruction)
         goal_state = _goal_state(task, episode_steps)
-        target_actions = [parse_action_label(action) for action in task.get("target", {}).get("actions", [])]
 
         if not episode_steps:
-            if not target_actions:
-                continue
-            examples.append(
-                GUIStepExample(
-                    example_id=f"{task.get('task_id', task_id)}__root",
-                    user_id=str(task.get("input", {}).get("user_id", "")),
-                    task_id=task_id,
-                    instruction=instruction,
-                    state_id=str(task.get("metadata", {}).get("papo_root_step_id", f"{episode_id}__0000")),
-                    screenshot_path=str(task.get("input", {}).get("initial_screenshot", "")) or None,
-                    ui_tree=_safe_xml_text(task.get("input", {}).get("initial_xml")),
-                    action_history=[],
-                    current_action=target_actions[0],
-                    future_trajectory=target_actions[1:],
-                    task_success=1.0,
-                    progress=1.0 / max(len(target_actions), 1),
-                    goal_state=goal_state,
-                    invalid_count=0,
-                    risk_score=0.0,
-                    split=split,
-                )
-            )
             continue
 
         num_steps = len(episode_steps)
-        episode_success = 1.0 if bool(episode_steps[-1].get("is_terminal")) or target_actions else 0.0
+        trajectory_id = f"episode::{episode_id}"
+        episode_success = 1.0 if bool(episode_steps[-1].get("is_terminal")) else 0.0
         for index, step in enumerate(episode_steps):
-            action_history = [parse_action_label(prev.get("action") or prev.get("raw_action") or "") for prev in episode_steps[:index]]
-            current_action = parse_action_label(step.get("action") or step.get("raw_action") or "")
-            future_trajectory = [parse_action_label(row.get("action") or row.get("raw_action") or "") for row in episode_steps[index + 1 :]]
+            action_history = [_parse_step_action(prev) for prev in episode_steps[:index]]
+            current_action = _parse_step_action(step)
+            future_trajectory = [_parse_step_action(row) for row in episode_steps[index + 1 :]]
             examples.append(
                 GUIStepExample(
                     example_id=str(step.get("papo_step_id") or f"{episode_id}__{index:04d}"),
@@ -120,6 +112,7 @@ def _build_examples(tasks: list[dict[str, Any]], steps_by_episode: dict[str, lis
                     task_id=task_id,
                     instruction=instruction,
                     state_id=str(step.get("papo_step_id") or step.get("state_key") or f"{episode_id}__{index:04d}"),
+                    source_trajectory_id=trajectory_id,
                     screenshot_path=str(step.get("screenshot_path") or task.get("input", {}).get("initial_screenshot") or "") or None,
                     ui_tree=_step_ui_tree(step),
                     action_history=action_history,
@@ -146,27 +139,9 @@ def _build_train_trajectories(tasks: list[dict[str, Any]], steps_by_episode: dic
         seen.add(episode_id)
         instruction = _task_instruction(task)
         episode_steps = steps_by_episode.get(episode_id, [])
-        if episode_steps:
-            trajectories.append(_trajectory_from_episode(episode_id, episode_steps, instruction=instruction, split="train"))
-            continue
-        actions = [parse_action_label(action) for action in task.get("target", {}).get("actions", [])]
-        if not actions:
-            continue
-        trajectories.append(
-            TrajectoryRecord(
-                trajectory_id=f"episode::{episode_id}",
-                user_id=str(task.get("input", {}).get("user_id", "")),
-                task_id=stable_task_id(instruction),
-                instruction=instruction,
-                actions=actions,
-                task_success=1.0,
-                progress=1.0,
-                goal_state=_goal_state(task, episode_steps),
-                invalid_count=0,
-                risk_score=0.0,
-                split="train",
-            )
-        )
+        if not episode_steps:
+            raise ValueError(f"Missing PAPO steps for target episode {episode_id}; refusing to fall back to evaluation-only target.actions.")
+        trajectories.append(_trajectory_from_episode(episode_id, episode_steps, instruction=instruction, split="train"))
     return trajectories
 
 
@@ -225,7 +200,7 @@ def _build_history_trajectories(
 
 def _trajectory_from_episode(episode_id: str, episode_steps: list[dict[str, Any]], instruction: str, split: str) -> TrajectoryRecord:
     ordered = sorted(episode_steps, key=lambda row: int(row.get("step_index", 0) or 0))
-    actions = [parse_action_label(step.get("action") or step.get("raw_action") or "") for step in ordered]
+    actions = [_parse_step_action(step) for step in ordered]
     risk_values = [max(0.0, 1.0 - float(step.get("action_confidence", 0.0) or 0.0)) for step in ordered]
     return TrajectoryRecord(
         trajectory_id=f"episode::{episode_id}",
@@ -240,6 +215,50 @@ def _trajectory_from_episode(episode_id: str, episode_steps: list[dict[str, Any]
         invalid_count=sum(0 if bool(step.get("valid_observation")) else 1 for step in ordered),
         risk_score=sum(risk_values) / max(len(risk_values), 1),
         split=split,
+    )
+
+
+def _parse_step_action(step: dict[str, Any]) -> Action:
+    return parse_action_label(
+        str(step.get("action") or step.get("raw_action") or ""),
+        raw_action=str(step.get("raw_action") or ""),
+        object_text=str(step.get("object_text") or ""),
+        object_role=str(step.get("object_role") or ""),
+    )
+
+
+def _extract_input_text(raw_action: str | None) -> str:
+    text = str(raw_action or "")
+    if not text:
+        return ""
+    for field in ("content", "text"):
+        single = re.search(field + r"\s*=\s*'([^']*)'", text)
+        if single:
+            return single.group(1).strip()
+        double = re.search(field + r'\s*=\s*"([^"]*)"', text)
+        if double:
+            return double.group(1).strip()
+    return ""
+
+
+def _validate_target_episode_coverage(
+    train_tasks: list[dict[str, Any]],
+    eval_tasks: list[dict[str, Any]],
+    steps_by_episode: dict[str, list[dict[str, Any]]],
+) -> None:
+    missing_train = sorted({episode_id for episode_id in (_episode_id_from_task(task) for task in train_tasks) if not steps_by_episode.get(episode_id)})
+    missing_eval = sorted({episode_id for episode_id in (_episode_id_from_task(task) for task in eval_tasks) if not steps_by_episode.get(episode_id)})
+    if not missing_train and not missing_eval:
+        return
+
+    details: list[str] = []
+    if missing_train:
+        details.append("train missing PAPO steps: " + ", ".join(missing_train[:10]))
+    if missing_eval:
+        details.append("eval missing PAPO steps: " + ", ".join(missing_eval[:10]))
+    raise ValueError(
+        "Main-project TN-DPO adapter requires PAPO step coverage for every target episode and will not backfill from evaluation-only target.actions.\n"
+        + "\n".join(details)
     )
 
 

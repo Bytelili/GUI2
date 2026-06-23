@@ -66,6 +66,7 @@ def test_pair_builder_generates_nullspace_pairs() -> None:
         task_id="task_music",
         instruction="Search for Taylor Swift songs",
         state_id="state_1",
+        source_trajectory_id="traj_a",
         ui_tree="Search box input\nFavorites button\nHome button\nScrollable results list",
         action_history=[Action(action_type="click", target="Home")],
         current_action=Action(action_type="click", target="Search box"),

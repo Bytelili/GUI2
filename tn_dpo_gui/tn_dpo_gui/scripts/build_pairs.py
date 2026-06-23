@@ -61,6 +61,9 @@ def main() -> None:
         "num_pairs": len(pairs),
         "avg_weight": sum(pair.weight for pair in pairs) / max(len(pairs), 1),
         "avg_gate_capacity": sum(pair.gate_capacity for pair in pairs) / max(len(pairs), 1),
+        "pair_counts_by_split": {
+            split: sum(1 for pair in pairs if pair.split == split) for split in sorted({pair.split for pair in pairs})
+        },
     }
     if config.get("_main_project_layout"):
         summary["main_project_layout"] = config["_main_project_layout"]

@@ -26,7 +26,11 @@ def train_ranker(config: dict) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     encoder = SimpleTextEncoder(**config.get("encoder", {}))
-    dataset = TNDPOPairDataset(load_pairs(pair_path), text_encoder=encoder)
+    allowed_splits = {str(split).lower() for split in config.get("data", {}).get("splits", ["train"])}
+    pairs = load_pairs(pair_path, allowed_splits=allowed_splits)
+    if not pairs:
+        raise ValueError(f"No TN-DPO pairs matched training splits {sorted(allowed_splits)} in {pair_path}")
+    dataset = TNDPOPairDataset(pairs, text_encoder=encoder)
     loader = DataLoader(
         dataset,
         batch_size=int(config["training"].get("batch_size", 16)),
@@ -80,6 +84,7 @@ def train_ranker(config: dict) -> dict:
         "train_loss": meter.average,
         "pair_accuracy": pair_accuracy_from_scores(all_chosen_scores, all_rejected_scores),
         "num_pairs": len(dataset),
+        "splits": sorted(allowed_splits),
     }
     checkpoint = {
         "model_state": model.state_dict(),

@@ -2,6 +2,8 @@ seed: 7
 
 data:
   pairs_path: artifacts/pairs/pairs.jsonl
+  splits:
+    - train
 
 encoder:
   dim: 256

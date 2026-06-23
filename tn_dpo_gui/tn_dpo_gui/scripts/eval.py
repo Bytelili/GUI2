@@ -36,19 +36,22 @@ def main() -> None:
             "output": ["report_path"],
         },
     )
+    allowed_splits = {str(split).lower() for split in config.get("data", {}).get("splits", ["eval"])}
 
     report = {
         "ranker": evaluate_ranker(
             config["data"]["pairs_path"],
             config["checkpoints"]["ranker_path"],
             batch_size=int(config.get("evaluation", {}).get("batch_size", 32)),
+            allowed_splits=allowed_splits,
         ),
         "gate": evaluate_gate(
             config["data"]["pairs_path"],
             config["checkpoints"]["gate_path"],
             batch_size=int(config.get("evaluation", {}).get("batch_size", 32)),
+            allowed_splits=allowed_splits,
         ),
-        "projection": evaluate_projection(config["data"]["pairs_path"]),
+        "projection": evaluate_projection(config["data"]["pairs_path"], allowed_splits=allowed_splits),
     }
     write_json(config["output"]["report_path"], report)
     print(report)

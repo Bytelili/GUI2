@@ -94,7 +94,9 @@ python scripts/09_run_config_pipeline.py --config config.yaml
 
 - The default encoder is deterministic hashing so the project runs without downloading external embedding models.
 - If you later want stronger text features, set `encoder.backend: sentence_transformers` and install `sentence-transformers`.
-- History retrieval never reads from `test` split data.
-- Continuation retrieval only reuses the current example's future trajectory for `train/history` samples when the queried action matches the logged action.
-- The gate defaults to predicting raw capacity and subtracting `gate_cost` only at inference time. If you want the attachment's alternative target style, set `target_mode: net_capacity`.
+- Ranker and gate training now read only `train` pairs by default, while offline evaluation reads only `eval` pairs by default.
+- History retrieval never reads from `test` split data and excludes the current example's own trajectory from user-history lookup.
+- Continuation retrieval excludes the current trajectory from offline retrieval and only reuses the current example's future trajectory for `train/history` samples when the queried action matches the logged action.
+- The gate defaults to the attachment-aligned `target_mode: net_capacity`, so the regression target is `capacity - gate_cost`.
+- In main-project mode, missing PAPO step coverage for any target episode is treated as an error instead of silently backfilling from evaluation-only `target.actions`.
 - In main-project mode, the training checkpoints also record the root config's `model_name_or_path` for experiment provenance.

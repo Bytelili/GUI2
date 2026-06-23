@@ -27,7 +27,7 @@ class CapacityGate(nn.Module):
         return self.mlp(features).squeeze(-1)
 
     @staticmethod
-    def gate_value(capacity_prediction, cost: float = 0.0, tau_g: float = 0.5, target_mode: str = "capacity"):
+    def gate_value(capacity_prediction, cost: float = 0.0, tau_g: float = 0.5, target_mode: str = "net_capacity"):
         if target_mode == "net_capacity":
             return torch.sigmoid(capacity_prediction / max(float(tau_g), 1e-8))
         return torch.sigmoid((capacity_prediction - float(cost)) / max(float(tau_g), 1e-8))

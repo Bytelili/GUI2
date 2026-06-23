@@ -2,99 +2,43 @@ from __future__ import annotations
 
 import json
 
-from tn_dpo_gui.data.main_project_adapter import convert_main_project_artifacts
+import pytest
+
+from tn_dpo_gui.data.main_project_adapter import convert_main_project_artifacts, parse_action_label
 
 
-def test_main_project_adapter_preserves_train_eval_and_history_separation(tmp_path) -> None:
-    train_tasks = [
-        {
-            "task_id": "execution__train_ep",
-            "input": {
-                "user_id": "u1",
-                "time": "t1",
-                "instruction": "Open settings",
-                "same_user_action_references": [
-                    {"episode_id": "hist_ep", "user_id": "u1", "time": "t0", "intent": "Open settings", "actions": ["select:Settings"]}
-                ],
-            },
-            "target": {"actions": ["select:Settings"], "intent_class": "settings"},
-            "metadata": {"papo_episode_id": "train_ep", "partition": "train"},
-        }
-    ]
-    eval_tasks = [
-        {
-            "task_id": "execution__eval_ep",
-            "input": {
-                "user_id": "u2",
-                "time": "t2",
-                "instruction": "Open settings",
-                "same_user_action_references": [
-                    {"episode_id": "hist_ep", "user_id": "u1", "time": "t0", "intent": "Open settings", "actions": ["select:Settings"]}
-                ],
-            },
-            "target": {"actions": ["select:Settings"], "intent_class": "settings"},
-            "metadata": {"papo_episode_id": "eval_ep", "partition": "eval"},
-        }
-    ]
-    steps = [
-        {
-            "papo_step_id": "train_ep__0000",
-            "episode_id": "train_ep",
-            "user_id": "u1",
-            "step_index": 0,
-            "intent": "Open settings",
-            "state_key": "state_a",
-            "next_state_key": "state_b",
-            "action": "select:Settings",
-            "raw_action": "click(settings)",
-            "valid_observation": True,
-            "action_confidence": 0.9,
-            "is_terminal": True,
-            "object_tokens": ["Button|Settings"],
-        },
-        {
-            "papo_step_id": "eval_ep__0000",
-            "episode_id": "eval_ep",
-            "user_id": "u2",
-            "step_index": 0,
-            "intent": "Open settings",
-            "state_key": "state_a",
-            "next_state_key": "state_b",
-            "action": "select:Settings",
-            "raw_action": "click(settings)",
-            "valid_observation": True,
-            "action_confidence": 0.9,
-            "is_terminal": True,
-            "object_tokens": ["Button|Settings"],
-        },
-        {
-            "papo_step_id": "hist_ep__0000",
-            "episode_id": "hist_ep",
-            "user_id": "u1",
-            "step_index": 0,
-            "intent": "Open settings",
-            "state_key": "state_hist",
-            "next_state_key": "state_hist_done",
-            "action": "select:Settings",
-            "raw_action": "click(settings)",
-            "valid_observation": True,
-            "action_confidence": 0.8,
-            "is_terminal": True,
-            "object_tokens": ["Button|Settings"],
-        },
-    ]
+def _write_jsonl(path, rows) -> None:
+    path.write_text("\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + ("\n" if rows else ""), encoding="utf-8")
 
+
+def test_convert_main_project_artifacts_requires_target_step_coverage(tmp_path) -> None:
+    train_task = {
+        "input": {"instruction": "Search for Taylor Swift songs", "user_id": "user_a", "time": "2024-01-01T00:00:00"},
+        "metadata": {"papo_episode_id": "episode_train_001", "partition": "train"},
+        "target": {"actions": ["input:TextField", "submit:Search"]},
+    }
+    eval_task = {
+        "input": {"instruction": "Open favorite playlist", "user_id": "user_b", "time": "2024-01-02T00:00:00"},
+        "metadata": {"papo_episode_id": "episode_eval_001", "partition": "eval"},
+        "target": {"actions": ["select:Favorites", "submit:Daily Mix"]},
+    }
     train_path = tmp_path / "train.jsonl"
     eval_path = tmp_path / "eval.jsonl"
     steps_path = tmp_path / "steps.jsonl"
-    for path, rows in [(train_path, train_tasks), (eval_path, eval_tasks), (steps_path, steps)]:
-        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    _write_jsonl(train_path, [train_task])
+    _write_jsonl(eval_path, [eval_task])
+    _write_jsonl(steps_path, [])
 
-    examples, trajectories, summary = convert_main_project_artifacts(train_path, eval_path, steps_path)
+    with pytest.raises(ValueError, match="requires PAPO step coverage"):
+        convert_main_project_artifacts(train_path, eval_path, steps_path)
 
-    assert summary["train_examples"] == 1
-    assert summary["eval_examples"] == 1
-    assert {example.split for example in examples} == {"train", "eval"}
-    assert any(record.split == "train" and record.trajectory_id == "episode::train_ep" for record in trajectories)
-    assert any(record.split == "history" and record.trajectory_id == "episode::hist_ep" for record in trajectories)
-    assert not any(record.split == "history" and record.trajectory_id == "episode::eval_ep" for record in trajectories)
+
+def test_parse_action_label_recovers_typed_text_from_raw_action() -> None:
+    action = parse_action_label(
+        "input:TextField",
+        raw_action='type(text="Taylor Swift", coordinates=(100, 200))',
+        object_role="TextField",
+    )
+    assert action.action_type == "type"
+    assert action.target == "TextField"
+    assert action.text == "Taylor Swift"

@@ -44,7 +44,7 @@ def config_path(config: dict[str, Any], key: str) -> Path:
 def model_location(config: dict[str, Any]) -> str:
     value = str(config.get("training", {}).get("model_name_or_path") or config.get("paths", {}).get("qwen_model_path") or "")
     if _looks_absolute(value) or value.startswith("."):
-        return str(_resolve_path_like(value, Path(config["_project_root"])))
+        return path_to_string(_resolve_path_like(value, Path(config["_project_root"])))
     return value
 
 
@@ -130,3 +130,9 @@ def _resolve_path_like(value: Any, project_root: Path) -> Path:
     if _looks_absolute(text):
         return Path(text)
     return project_root / Path(text)
+
+
+def path_to_string(value: Any) -> str:
+    if isinstance(value, Path):
+        return value.as_posix()
+    return str(value)

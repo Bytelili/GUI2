@@ -17,6 +17,7 @@ class GUIStepExample:
     task_id: str
     instruction: str
     state_id: str
+    source_trajectory_id: str | None = None
     screenshot_path: str | None = None
     ui_tree: str | None = None
     action_history: list[Action] = field(default_factory=list)
@@ -37,6 +38,7 @@ class GUIStepExample:
             task_id=str(payload["task_id"]),
             instruction=str(payload["instruction"]),
             state_id=str(payload["state_id"]),
+            source_trajectory_id=payload.get("source_trajectory_id"),
             screenshot_path=payload.get("screenshot_path"),
             ui_tree=payload.get("ui_tree"),
             action_history=_coerce_actions(payload.get("action_history")),
@@ -57,6 +59,7 @@ class GUIStepExample:
             "task_id": self.task_id,
             "instruction": self.instruction,
             "state_id": self.state_id,
+            "source_trajectory_id": self.source_trajectory_id,
             "screenshot_path": self.screenshot_path,
             "ui_tree": self.ui_tree,
             "action_history": [action.to_dict() for action in self.action_history],

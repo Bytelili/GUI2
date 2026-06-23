@@ -4,6 +4,8 @@ main_project:
 
 data:
   pairs_path: auto
+  splits:
+    - eval
 
 checkpoints:
   ranker_path: auto

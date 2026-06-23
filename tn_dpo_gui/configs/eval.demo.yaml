@@ -1,5 +1,7 @@
 data:
   pairs_path: artifacts/pairs/pairs.jsonl
+  splits:
+    - eval
 
 checkpoints:
   ranker_path: artifacts/ranker/ranker.pt

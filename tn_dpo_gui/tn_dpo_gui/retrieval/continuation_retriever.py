@@ -48,8 +48,11 @@ class ContinuationRetriever:
         action_key = normalized_action.normalized_key()
         query_vector = self.text_encoder.encode_text(example.instruction)
         candidates: list[TrajectoryContinuation] = []
+        source_trajectory_id = example.source_trajectory_id or ""
 
         for record in self.records:
+            if source_trajectory_id and record.trajectory_id == source_trajectory_id:
+                continue
             instruction_score = cosine_similarity(query_vector, self.text_encoder.encode_text(record.instruction))
             same_task_bonus = 1.0 if record.task_id == example.task_id else 0.0
             exact_action_bonus = 1.0 if any(act.normalized_key() == action_key for act in record.actions) else 0.0
@@ -60,6 +63,8 @@ class ContinuationRetriever:
 
         if not candidates:
             for record in self.records:
+                if source_trajectory_id and record.trajectory_id == source_trajectory_id:
+                    continue
                 if record.task_id != example.task_id:
                     continue
                 instruction_score = cosine_similarity(query_vector, self.text_encoder.encode_text(record.instruction))

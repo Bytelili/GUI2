@@ -7,6 +7,7 @@ from typing import Any
 import torch
 from torch.utils.data import Dataset
 
+from tn_dpo_gui.data.split import filter_by_split
 from tn_dpo_gui.encoders.action_encoder import ActionEncoder
 from tn_dpo_gui.encoders.text_encoder import SimpleTextEncoder
 from tn_dpo_gui.utils.io import read_jsonl
@@ -14,8 +15,15 @@ from tn_dpo_gui.utils.io import read_jsonl
 from .pair_schema import TNDPOPair
 
 
-def load_pairs(path: str | Path) -> list[TNDPOPair]:
-    return [TNDPOPair.from_dict(record) for record in read_jsonl(path)]
+def filter_pairs_by_split(pairs: list[TNDPOPair], allowed_splits: set[str] | None = None) -> list[TNDPOPair]:
+    if not allowed_splits:
+        return list(pairs)
+    return filter_by_split(pairs, allowed_splits, split_attr="split")
+
+
+def load_pairs(path: str | Path, allowed_splits: set[str] | None = None) -> list[TNDPOPair]:
+    pairs = [TNDPOPair.from_dict(record) for record in read_jsonl(path)]
+    return filter_pairs_by_split(pairs, allowed_splits)
 
 
 def group_pairs_by_state(pairs: list[TNDPOPair]) -> dict[str, list[TNDPOPair]]:
@@ -43,7 +51,7 @@ def summarize_gate_features(state_pairs: list[TNDPOPair], max_candidates: int = 
     )
 
 
-def gate_target_value(capacity: float, gate_cost: float, target_mode: str = "capacity") -> float:
+def gate_target_value(capacity: float, gate_cost: float, target_mode: str = "net_capacity") -> float:
     if target_mode == "net_capacity":
         return float(capacity) - float(gate_cost)
     return float(capacity)
@@ -77,7 +85,7 @@ class GateStateDataset(Dataset):
         pairs: list[TNDPOPair],
         text_encoder: SimpleTextEncoder | None = None,
         gate_cost: float = 0.0,
-        target_mode: str = "capacity",
+        target_mode: str = "net_capacity",
         max_candidates: int = 8,
     ) -> None:
         self.text_encoder = text_encoder or SimpleTextEncoder()

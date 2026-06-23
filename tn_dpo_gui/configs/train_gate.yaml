@@ -6,6 +6,8 @@ seed: 7
 
 data:
   pairs_path: auto
+  splits:
+    - train
 
 encoder:
   dim: 256
@@ -21,7 +23,7 @@ training:
   lr: 0.001
   gate_cost: 0.10
   tau_g: 0.50
-  target_mode: capacity
+  target_mode: net_capacity
   max_candidates: 8
 
 output:

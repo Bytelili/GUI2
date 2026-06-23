@@ -70,7 +70,13 @@ class TNDPOPairBuilder:
         min_null_margin = float(self.config.get("min_null_margin", 0.02))
 
         for example in examples:
-            history = self.history_retriever.retrieve(example.user_id, example.instruction, limit=history_limit)
+            exclude_history = {example.source_trajectory_id} if example.source_trajectory_id else None
+            history = self.history_retriever.retrieve(
+                example.user_id,
+                example.instruction,
+                limit=history_limit,
+                exclude_trajectory_ids=exclude_history,
+            )
             history_text = self.user_history_encoder.summarize_history(history, limit=history_limit)
             user_vector = self.user_history_encoder.encode_user_history(history, example.instruction)
             user_context_text = history_text
@@ -183,6 +189,7 @@ class TNDPOPairBuilder:
                         "right_source": raw_pair["right_continuation"].source_example_id,
                         "num_candidates": len(candidates),
                         "history_context": history_text,
+                        "source_trajectory_id": example.source_trajectory_id,
                         "base_policy": self.base_policy.__class__.__name__,
                     },
                 )

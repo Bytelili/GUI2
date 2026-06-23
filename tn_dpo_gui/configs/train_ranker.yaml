@@ -6,6 +6,8 @@ seed: 7
 
 data:
   pairs_path: auto
+  splits:
+    - train
 
 encoder:
   dim: 256

@@ -26,10 +26,14 @@ def train_gate(config: dict) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     encoder = SimpleTextEncoder(**config.get("encoder", {}))
-    target_mode = str(config["training"].get("target_mode", "capacity"))
+    target_mode = str(config["training"].get("target_mode", "net_capacity"))
     gate_cost = float(config["training"].get("gate_cost", 0.1))
+    allowed_splits = {str(split).lower() for split in config.get("data", {}).get("splits", ["train"])}
+    pairs = load_pairs(pair_path, allowed_splits=allowed_splits)
+    if not pairs:
+        raise ValueError(f"No TN-DPO pairs matched gate-training splits {sorted(allowed_splits)} in {pair_path}")
     dataset = GateStateDataset(
-        load_pairs(pair_path),
+        pairs,
         text_encoder=encoder,
         gate_cost=gate_cost,
         target_mode=target_mode,
@@ -83,12 +87,23 @@ def train_gate(config: dict) -> dict:
             )
 
     metrics = regression_metrics(predictions, targets)
-    metrics.update({"avg_gate_value": sum(gates) / max(len(gates), 1), "avg_capacity": sum(capacities) / max(len(capacities), 1)})
+    metrics.update(
+        {
+            "avg_gate_value": sum(gates) / max(len(gates), 1),
+            "avg_capacity": sum(capacities) / max(len(capacities), 1),
+            "splits": sorted(allowed_splits),
+        }
+    )
     checkpoint = {
         "model_state": model.state_dict(),
         "encoder_config": encoder.get_config(),
         "model_config": {"hidden_dim": hidden_dim, "dropout": dropout},
-        "training_config": {"gate_cost": gate_cost, "tau_g": float(config["training"].get("tau_g", 0.5)), "target_mode": target_mode},
+        "training_config": {
+            "gate_cost": gate_cost,
+            "tau_g": float(config["training"].get("tau_g", 0.5)),
+            "target_mode": target_mode,
+            "splits": sorted(allowed_splits),
+        },
         "base_model_path": str(config["training"].get("base_model_path", "")),
         "metrics": metrics,
     }

@@ -19,10 +19,16 @@ class UserHistoryRetriever:
         query_instruction: str | None = None,
         limit: int = 5,
         allowed_splits: tuple[str, ...] = ("train", "history"),
+        exclude_trajectory_ids: set[str] | None = None,
     ) -> list[TrajectoryRecord]:
         assert_no_test_splits(allowed_splits)
         allowed = {split.lower() for split in allowed_splits} or HISTORICAL_SPLITS
-        candidates = [record for record in self.index.get(user_id) if record.split.lower() in allowed]
+        excluded = {trajectory_id for trajectory_id in (exclude_trajectory_ids or set()) if trajectory_id}
+        candidates = [
+            record
+            for record in self.index.get(user_id)
+            if record.split.lower() in allowed and record.trajectory_id not in excluded
+        ]
         if not query_instruction or not candidates:
             return candidates[:limit]
 
