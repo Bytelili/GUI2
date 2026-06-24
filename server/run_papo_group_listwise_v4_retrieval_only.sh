@@ -9,6 +9,7 @@ CONFIG="$PROJECT_ROOT/configs/llamafactory/ui_tars_7b_papo_group_listwise_v4_ret
 OUTPUT="$PROJECT_ROOT/LLaMA-Factory/saves/papo/ui_tars_7b_papo_group_listwise_v4_retrieval_only_$RELEASE_ID"
 RUN_DIR="$PROJECT_ROOT/runs/papo/group_listwise_v4_retrieval_only_$RELEASE_ID"
 REPORT_DIR="$PROJECT_ROOT/reports/proactive/group_listwise_v4_retrieval_only_$RELEASE_ID"
+CHECKPOINT_EVAL_ROOT="$REPORT_DIR/checkpoint_eval"
 ACTION="${1:-status}"
 PROBE_CONFIG="$RUN_DIR/eval_probe.yaml"
 PROBE_REPORT_DIR="$REPORT_DIR/eval_batch_probe"
@@ -414,6 +415,80 @@ report() {
   cat "$REPORT_DIR/group_listwise_v4_retrieval_only_report.md"
 }
 
+eval_checkpoints() {
+  local checkpoints=()
+  local labels=()
+  local checkpoint label step summary_dir
+
+  mapfile -t checkpoints < <(
+    {
+      find "$OUTPUT" -maxdepth 1 -type d -name 'checkpoint-*' | sort -V
+      if [[ -f "$OUTPUT/adapter_model.safetensors" ]]; then
+        printf '%s\n' "$OUTPUT"
+      fi
+    } | awk '!seen[$0]++'
+  )
+
+  if [[ -n "${CHECKPOINT_STEPS:-}" ]]; then
+    local filtered=()
+    for checkpoint in "${checkpoints[@]}"; do
+      step="$(basename "$checkpoint")"
+      step="${step#checkpoint-}"
+      if [[ "$checkpoint" == "$OUTPUT" ]]; then
+        step="final"
+      fi
+      for wanted in ${CHECKPOINT_STEPS}; do
+        if [[ "$step" == "$wanted" ]]; then
+          filtered+=("$checkpoint")
+          break
+        fi
+      done
+    done
+    checkpoints=("${filtered[@]}")
+  fi
+
+  if [[ "${#checkpoints[@]}" -eq 0 ]]; then
+    echo "No preserved checkpoints were found under $OUTPUT" >&2
+    exit 1
+  fi
+
+  mkdir -p "$CHECKPOINT_EVAL_ROOT"
+  for checkpoint in "${checkpoints[@]}"; do
+    if [[ "$checkpoint" == "$OUTPUT" ]]; then
+      step="final"
+    else
+      step="$(basename "$checkpoint")"
+      step="${step#checkpoint-}"
+    fi
+    label="ui_tars_7b_papo_group_listwise_v4_retrieval_only_ckpt_${step}"
+    labels+=("$label")
+    echo "===== Prepare checkpoint provenance: $checkpoint ====="
+    python scripts/36_prepare_proactive_checkpoint_provenance.py \
+      --config config.yaml \
+      --training-config "$CONFIG" \
+      --checkpoint-dir "$checkpoint"
+    echo "===== Evaluate checkpoint: $label ====="
+    ALLOW_BUSY_GPUS="${ALLOW_BUSY_GPUS:-0}" \
+    CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}" \
+    MODE="${MODE:-strict_holdout}" \
+    LEVELS="${LEVELS:-0,1,2,3}" \
+    NUM_SHARDS="${NUM_SHARDS:-4}" \
+    MONITOR_INTERVAL="${MONITOR_INTERVAL:-60}" \
+    EVAL_MODEL_LABEL="$label" \
+    EVAL_ADAPTER="$checkpoint" \
+    REPORT_ROOT="$CHECKPOINT_EVAL_ROOT" \
+    bash ui_tars_proactive/run_ui_tars_7b.sh eval_adapter
+  done
+
+  summary_dir="$CHECKPOINT_EVAL_ROOT/summary"
+  python ui_tars_proactive/summarize_results.py \
+    --reports-root "$CHECKPOINT_EVAL_ROOT" \
+    --mode "${MODE:-strict_holdout}" \
+    --models "${labels[@]}" \
+    --output-dir "$summary_dir"
+  cat "$summary_dir/${MODE:-strict_holdout}_ui_tars_level_results.md"
+}
+
 case "$ACTION" in
   prepare) prepare ;;
   train) train ;;
@@ -422,5 +497,6 @@ case "$ACTION" in
   status) status ;;
   monitor) monitor ;;
   report) report ;;
-  *) echo "Usage: $0 {prepare|train|probe_eval|probe_eval_grid|status|monitor|report}" >&2; exit 2 ;;
+  eval_checkpoints) eval_checkpoints ;;
+  *) echo "Usage: $0 {prepare|train|probe_eval|probe_eval_grid|status|monitor|report|eval_checkpoints}" >&2; exit 2 ;;
 esac

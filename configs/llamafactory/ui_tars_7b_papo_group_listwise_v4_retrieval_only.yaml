@@ -29,8 +29,9 @@ papo_dataset_root: /home/dumike/zyy/GUI2/LLaMA-Factory/data/papo_group_listwise_
 output_dir: /home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo/ui_tars_7b_papo_group_listwise_v4_retrieval_only_20260622T065645Z
 logging_dir: /home/dumike/zyy/GUI2/runs/papo/ui_tars_7b_papo_group_listwise_v4_retrieval_only_20260622T065645Z
 per_device_train_batch_size: 1
-# Eval does not keep backward activations, so use a larger eval micro-batch to
-# reduce long validation stalls on 96 GB GPUs.
+# Post-hoc checkpoint evaluation uses a separate pipeline. Keep the eval batch
+# here only for tooling that reads the config, but disable in-training eval so
+# grouped multimodal DDP training cannot stall inside distributed eval gather.
 per_device_eval_batch_size: 2
 gradient_accumulation_steps: 4
 gradient_checkpointing: true
@@ -45,13 +46,15 @@ tf32: true
 # above the observed preprocessing wall time.
 ddp_timeout: 21600
 logging_steps: 10
-eval_strategy: steps
+eval_strategy: "no"
 eval_on_start: false
+# Keep the historical step cadence documented here even though this run now
+# evaluates checkpoints only after training completes.
 eval_steps: 200
 save_strategy: steps
 save_steps: 200
 save_total_limit: null
-load_best_model_at_end: true
+load_best_model_at_end: false
 metric_for_best_model: eval_loss
 greater_is_better: false
 report_to: tensorboard
