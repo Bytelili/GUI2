@@ -39,7 +39,8 @@ def main() -> None:
         raise FileNotFoundError(f"Checkpoint has no adapter_model.safetensors: {checkpoint_dir}")
 
     dataset_dir = Path(str(training["dataset_dir"])).resolve()
-    dataset_info = json.loads((dataset_dir / "dataset_info.json").read_text(encoding="utf-8"))
+    dataset_info_path = dataset_dir / "dataset_info.json"
+    dataset_info = json.loads(dataset_info_path.read_text(encoding="utf-8"))
     dataset_names = _names(training.get("dataset"))
     eval_names = _names(training.get("eval_dataset"))
     if not dataset_names or not eval_names:
@@ -67,9 +68,11 @@ def main() -> None:
         "training_config": str(training_path),
         "training_config_sha256": sha256_file(training_path),
         "output_dir": str(output_dir),
+        "dataset_dir": str(dataset_dir),
         "datasets": dataset_names,
         "eval_datasets": eval_names,
         "dataset_hashes": dataset_hashes,
+        "dataset_info_sha256": sha256_file(dataset_info_path),
         "train_rows": train_rows,
         "eval_rows": eval_rows,
         "protocol_manifest_sha256": sha256_file(manifest_path),

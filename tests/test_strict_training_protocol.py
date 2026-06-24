@@ -15,6 +15,9 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from papo.data_protocol import sha256_file
+from papo.proactive_adapter import validate_proactive_adapter
+
 
 def load_script(name: str):
     path = PROJECT_ROOT / "scripts" / name
@@ -496,6 +499,111 @@ class StrictTrainingProtocolTest(unittest.TestCase):
         self.assertEqual(comparison["paired_tasks"], 2)
         self.assertEqual(comparison["user_clusters"], 2)
         self.assertTrue((self.root / "report" / "proactive_level_report.md").exists())
+
+    def test_proactive_adapter_uses_provenance_dataset_dir_when_present(self) -> None:
+        adapter = self.root / "adapter"
+        protocol = self.root / "protocol"
+        correct_datasets = self.root / "datasets_v4"
+        wrong_datasets = self.root / "datasets_default"
+        adapter.mkdir()
+        protocol.mkdir()
+        correct_datasets.mkdir()
+        wrong_datasets.mkdir()
+        (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+        manifest = protocol / "protocol_manifest.json"
+        manifest.write_text(json.dumps({"status": "passed"}), encoding="utf-8")
+
+        correct_info = {}
+        hashes = {}
+        for name in ["papo_proactive_train_listwise_v4", "papo_proactive_eval_listwise_v4"]:
+            filename = f"{name}.json"
+            path = correct_datasets / filename
+            path.write_text("[]", encoding="utf-8")
+            correct_info[name] = {"file_name": filename}
+            hashes[name] = sha256_file(path)
+        (correct_datasets / "dataset_info.json").write_text(json.dumps(correct_info), encoding="utf-8")
+        (wrong_datasets / "dataset_info.json").write_text(
+            json.dumps({"papo_proactive_train_sft": {"file_name": "papo_proactive_train_sft.json"}}),
+            encoding="utf-8",
+        )
+        (adapter / "papo_training_provenance.json").write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "protocol_id": "test_protocol",
+                    "protocol_manifest_sha256": sha256_file(manifest),
+                    "dataset_dir": str(correct_datasets),
+                    "datasets": ["papo_proactive_train_listwise_v4"],
+                    "eval_datasets": ["papo_proactive_eval_listwise_v4"],
+                    "dataset_hashes": hashes,
+                    "dataset_info_sha256": sha256_file(correct_datasets / "dataset_info.json"),
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = {
+            "_project_root": str(self.root),
+            "paths": {
+                "protocol_dir": str(protocol),
+                "llamafactory_data_dir": str(wrong_datasets),
+            },
+            "data": {"protocol": {"protocol_id": "test_protocol"}},
+        }
+        provenance = validate_proactive_adapter(adapter, config)
+        self.assertEqual(provenance["dataset_dir"], str(correct_datasets))
+
+    def test_proactive_adapter_rejects_changed_dataset_info_manifest(self) -> None:
+        adapter = self.root / "adapter_changed"
+        protocol = self.root / "protocol_changed"
+        datasets = self.root / "datasets_changed"
+        adapter.mkdir()
+        protocol.mkdir()
+        datasets.mkdir()
+        (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+        manifest = protocol / "protocol_manifest.json"
+        manifest.write_text(json.dumps({"status": "passed"}), encoding="utf-8")
+
+        filename = "papo_proactive_train_listwise_v4.json"
+        dataset_path = datasets / filename
+        dataset_path.write_text("[]", encoding="utf-8")
+        dataset_info_path = datasets / "dataset_info.json"
+        dataset_info_path.write_text(
+            json.dumps(
+                {
+                    "papo_proactive_train_listwise_v4": {"file_name": filename},
+                    "papo_proactive_eval_listwise_v4": {"file_name": filename},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (adapter / "papo_training_provenance.json").write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "protocol_id": "test_protocol",
+                    "protocol_manifest_sha256": sha256_file(manifest),
+                    "dataset_dir": str(datasets),
+                    "datasets": ["papo_proactive_train_listwise_v4"],
+                    "eval_datasets": ["papo_proactive_eval_listwise_v4"],
+                    "dataset_hashes": {
+                        "papo_proactive_train_listwise_v4": sha256_file(dataset_path),
+                        "papo_proactive_eval_listwise_v4": sha256_file(dataset_path),
+                    },
+                    "dataset_info_sha256": "deadbeef",
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = {
+            "_project_root": str(self.root),
+            "paths": {
+                "protocol_dir": str(protocol),
+                "llamafactory_data_dir": str(datasets),
+            },
+            "data": {"protocol": {"protocol_id": "test_protocol"}},
+        }
+        with self.assertRaisesRegex(ValueError, "dataset_info.json changed after training"):
+            validate_proactive_adapter(adapter, config)
 
     def write_dataset(self, name: str, partition: str, episode_ids: list[str]) -> None:
         info_path = self.dataset_dir / "dataset_info.json"

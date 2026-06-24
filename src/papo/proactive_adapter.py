@@ -34,8 +34,12 @@ def validate_proactive_adapter(adapter_dir: str | Path, config: dict[str, Any]) 
     if sha256_file(manifest_path) != provenance.get("protocol_manifest_sha256"):
         raise ValueError(f"Finalized adapter protocol manifest changed after training: {manifest_path}")
 
-    dataset_dir = config_path(config, "paths.llamafactory_data_dir")
-    dataset_info = json.loads((dataset_dir / "dataset_info.json").read_text(encoding="utf-8"))
+    dataset_dir = _resolve_dataset_dir(provenance, config)
+    dataset_info_path = dataset_dir / "dataset_info.json"
+    dataset_info = json.loads(dataset_info_path.read_text(encoding="utf-8"))
+    expected_dataset_info_sha256 = provenance.get("dataset_info_sha256")
+    if expected_dataset_info_sha256 and sha256_file(dataset_info_path) != expected_dataset_info_sha256:
+        raise ValueError(f"Finalized adapter dataset_info.json changed after training: {dataset_info_path}")
     for name, expected_hash in dict(provenance.get("dataset_hashes") or {}).items():
         if name not in dataset_info:
             raise KeyError(f"Finalized adapter dataset is missing from dataset_info.json: {name}")
@@ -43,3 +47,19 @@ def validate_proactive_adapter(adapter_dir: str | Path, config: dict[str, Any]) 
         if sha256_file(dataset_path) != expected_hash:
             raise ValueError(f"Finalized adapter dataset changed after training: {name}")
     return provenance
+
+
+def _resolve_dataset_dir(provenance: dict[str, Any], config: dict[str, Any]) -> Path:
+    explicit_dataset_dir = provenance.get("dataset_dir")
+    if explicit_dataset_dir:
+        dataset_dir = Path(str(explicit_dataset_dir)).resolve()
+        if not dataset_dir.is_dir():
+            raise FileNotFoundError(f"Finalized adapter dataset_dir does not exist: {dataset_dir}")
+        if not (dataset_dir / "dataset_info.json").exists():
+            raise FileNotFoundError(f"Finalized adapter dataset_info.json is missing: {dataset_dir}")
+        return dataset_dir
+
+    dataset_dir = config_path(config, "paths.llamafactory_data_dir")
+    if not (dataset_dir / "dataset_info.json").exists():
+        raise FileNotFoundError(f"Configured dataset_info.json is missing: {dataset_dir}")
+    return dataset_dir
