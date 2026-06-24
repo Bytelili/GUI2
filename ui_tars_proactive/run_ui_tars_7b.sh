@@ -6,6 +6,9 @@ MODE="${MODE:-strict_holdout}"
 LEVELS="${LEVELS:-0,1,2,3}"
 NUM_SHARDS="${NUM_SHARDS:-4}"
 MONITOR_INTERVAL="${MONITOR_INTERVAL:-60}"
+SHARD_STALL_WARN_SECONDS="${SHARD_STALL_WARN_SECONDS:-1200}"
+SHARD_STALL_FAIL_SECONDS="${SHARD_STALL_FAIL_SECONDS:-3600}"
+KILL_STALLED_SHARDS="${KILL_STALLED_SHARDS:-0}"
 LIMIT="${LIMIT:-0}"
 UI_TARS_MODEL="${UI_TARS_MODEL:-/home/dumike/zyy/GUI/backbone/UI-TARS-7B}"
 UI_TARS_TEMPLATE="${UI_TARS_TEMPLATE:-qwen2_vl}"
@@ -21,6 +24,25 @@ cd "$ROOT_DIR"
 source server_env.sh
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 IFS=',' read -r -a levels <<< "$LEVELS"
+
+log_age_seconds() {
+  local path="${1:-}"
+  if [[ -z "$path" || ! -f "$path" ]]; then
+    echo "-1"
+    return
+  fi
+  local now mtime
+  now="$(date +%s)"
+  mtime="$(stat -c %Y "$path" 2>/dev/null || echo 0)"
+  echo $((now - mtime))
+}
+
+process_elapsed_seconds() {
+  local pid="${1:-}"
+  local elapsed
+  elapsed="$(ps -o etimes= -p "$pid" 2>/dev/null | awk '{print $1 + 0}')"
+  echo "${elapsed:-0}"
+}
 
 validate_common() {
   echo "===== Validate UI-TARS experiment environment ====="
@@ -94,6 +116,7 @@ evaluate_one() {
   local pids=()
   local shards=()
   local logs=()
+  local warned=()
   local adapter_args=()
   local provenance_args=()
   local limit_args=()
@@ -134,6 +157,7 @@ evaluate_one() {
       "${provenance_args[@]}" \
       > "$log_path" 2>&1 &
     pids+=("$!")
+    warned+=("0")
   done
 
   while true; do
@@ -148,9 +172,35 @@ evaluate_one() {
     fi
     echo "----- Active UI-TARS prediction shards: $active / $NUM_SHARDS -----"
     nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv,noheader
-    for log_path in "${logs[@]}"; do
+    for index in "${!logs[@]}"; do
+      log_path="${logs[$index]}"
+      pid="${pids[$index]}"
       echo "----- $log_path -----"
       tail -n 2 "$log_path" 2>/dev/null || true
+      if kill -0 "$pid" 2>/dev/null; then
+        local log_age elapsed
+        log_age="$(log_age_seconds "$log_path")"
+        elapsed="$(process_elapsed_seconds "$pid")"
+        if [[ "$log_age" -ge "$SHARD_STALL_FAIL_SECONDS" ]] || [[ "$log_age" -lt 0 && "$elapsed" -ge "$SHARD_STALL_FAIL_SECONDS" ]]; then
+          echo "ERROR: shard $index appears stalled: pid=$pid, log_age=${log_age}s, elapsed=${elapsed}s" >&2
+          ps -fp "$pid" >&2 || true
+          tail -n 120 "$log_path" >&2 || true
+          if [[ "$KILL_STALLED_SHARDS" == "1" ]]; then
+            echo "KILL_STALLED_SHARDS=1 -> terminating all prediction shards." >&2
+            for shard_pid in "${pids[@]}"; do
+              kill -TERM "$shard_pid" 2>/dev/null || true
+            done
+          fi
+          exit 124
+        elif [[ "$log_age" -ge "$SHARD_STALL_WARN_SECONDS" ]] || [[ "$log_age" -lt 0 && "$elapsed" -ge "$SHARD_STALL_WARN_SECONDS" ]]; then
+          if [[ "${warned[$index]}" != "1" ]]; then
+            echo "WARNING: shard $index has no visible progress: pid=$pid, log_age=${log_age}s, elapsed=${elapsed}s" >&2
+            warned[$index]="1"
+          fi
+        else
+          warned[$index]="0"
+        fi
+      fi
     done
     sleep "$MONITOR_INTERVAL"
   done

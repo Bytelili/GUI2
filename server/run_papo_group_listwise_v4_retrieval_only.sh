@@ -13,6 +13,9 @@ CHECKPOINT_EVAL_ROOT="$REPORT_DIR/checkpoint_eval"
 ACTION="${1:-status}"
 PROBE_CONFIG="$RUN_DIR/eval_probe.yaml"
 PROBE_REPORT_DIR="$REPORT_DIR/eval_batch_probe"
+TRAIN_STALL_WARN_SECONDS="${TRAIN_STALL_WARN_SECONDS:-1200}"
+TRAIN_STALL_FAIL_SECONDS="${TRAIN_STALL_FAIL_SECONDS:-3600}"
+KILL_STALLED_TRAIN="${KILL_STALLED_TRAIN:-0}"
 
 cd "$PROJECT_ROOT"
 source server_env.sh
@@ -21,6 +24,18 @@ mkdir -p "$RUN_DIR" "$REPORT_DIR"
 latest_log() {
   find "$RUN_DIR" -maxdepth 1 -type f -name 'train_*.log' -printf '%T@ %p\n' 2>/dev/null \
     | sort -nr | head -n 1 | cut -d' ' -f2-
+}
+
+log_age_seconds() {
+  local path="${1:-}"
+  if [[ -z "$path" || ! -f "$path" ]]; then
+    echo "-1"
+    return
+  fi
+  local now mtime
+  now="$(date +%s)"
+  mtime="$(stat -c %Y "$path" 2>/dev/null || echo 0)"
+  echo $((now - mtime))
 }
 
 show_snapshot() {
@@ -33,6 +48,11 @@ show_snapshot() {
   if [[ -n "$log" ]]; then
     echo "===== Log ====="
     echo "$log"
+    local age
+    age="$(log_age_seconds "$log")"
+    if [[ "$age" -ge 0 ]]; then
+      echo "Log updated ${age}s ago"
+    fi
     python - "$log" <<'PY'
 import ast
 import re
@@ -390,9 +410,29 @@ status() {
 
 monitor() {
   local interval="${MONITOR_INTERVAL:-60}"
+  local warned=0
   while pgrep -af "llamafactory.*$(basename "$CONFIG")" >/dev/null; do
     date
     show_snapshot
+    local log age
+    log="$(latest_log)"
+    if [[ -n "$log" ]]; then
+      age="$(log_age_seconds "$log")"
+      if [[ "$age" -ge "$TRAIN_STALL_FAIL_SECONDS" ]]; then
+        echo "ERROR: training log has not advanced for ${age}s while the process is still alive." >&2
+        if [[ "$KILL_STALLED_TRAIN" == "1" ]]; then
+          echo "KILL_STALLED_TRAIN=1 -> terminating grouped-v4 training processes." >&2
+          pkill -f "llamafactory.*$(basename "$CONFIG")" || true
+          pkill -f "launcher.py $CONFIG" || true
+        fi
+        return 124
+      elif [[ "$age" -ge "$TRAIN_STALL_WARN_SECONDS" && "$warned" -eq 0 ]]; then
+        echo "WARNING: training log has not advanced for ${age}s. The process may be stalled." >&2
+        warned=1
+      elif [[ "$age" -ge 0 && "$age" -lt "$TRAIN_STALL_WARN_SECONDS" ]]; then
+        warned=0
+      fi
+    fi
     sleep "$interval"
   done
   date
