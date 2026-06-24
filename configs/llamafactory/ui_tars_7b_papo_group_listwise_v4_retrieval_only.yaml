@@ -48,11 +48,11 @@ ddp_timeout: 21600
 logging_steps: 10
 eval_strategy: "no"
 eval_on_start: false
-# Keep the historical step cadence documented here even though this run now
+# Keep the checkpoint cadence documented here even though this run now
 # evaluates checkpoints only after training completes.
-eval_steps: 200
+eval_steps: 100
 save_strategy: steps
-save_steps: 200
+save_steps: 100
 save_total_limit: null
 load_best_model_at_end: false
 metric_for_best_model: eval_loss
