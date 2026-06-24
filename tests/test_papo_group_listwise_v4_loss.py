@@ -35,6 +35,7 @@ if torch is not None:
     )
     papo_group_listwise_loss = loss_module.papo_group_listwise_loss
     papo_listwise_loss = loss_module.papo_listwise_loss
+    prepare_papo_group_eval_kwargs = loss_module.prepare_papo_group_eval_kwargs
     verify_papo_group_dataset_binding = loss_module.verify_papo_group_dataset_binding
 
 
@@ -112,6 +113,14 @@ class GroupListwiseLossTest(unittest.TestCase):
         self.assertEqual(
             set(metrics), {"group_loss", "oracle_top1_accuracy", "oracle_margin", "target_entropy", "policy_entropy"}
         )
+
+    def test_grouped_eval_kwargs_force_prediction_loss_only(self) -> None:
+        original = {"metric_key_prefix": "eval", "prediction_loss_only": False}
+        updated = prepare_papo_group_eval_kwargs(original)
+        self.assertIsNot(updated, original)
+        self.assertFalse(original["prediction_loss_only"])
+        self.assertTrue(updated["prediction_loss_only"])
+        self.assertEqual(updated["metric_key_prefix"], "eval")
 
     def test_illegal_target_distribution_and_oracle_are_rejected(self) -> None:
         logits, labels = _batch([1.0, 0.0])

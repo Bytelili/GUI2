@@ -31,7 +31,12 @@ from ...extras.constants import IGNORE_INDEX
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
-from .papo_group_listwise import papo_group_listwise_loss, papo_listwise_loss, verify_papo_group_dataset_binding
+from .papo_group_listwise import (
+    papo_group_listwise_loss,
+    papo_listwise_loss,
+    prepare_papo_group_eval_kwargs,
+    verify_papo_group_dataset_binding,
+)
 
 
 if TYPE_CHECKING:
@@ -245,8 +250,9 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         self._papo_eval_metric_sums = {}
         self._papo_eval_group_count = 0
         self._collect_papo_eval_metrics = True
+        eval_kwargs = prepare_papo_group_eval_kwargs(kwargs)
         try:
-            output = super().evaluation_loop(*args, **kwargs)
+            output = super().evaluation_loop(*args, **eval_kwargs)
         finally:
             self._collect_papo_eval_metrics = False
 
@@ -255,7 +261,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         totals = torch.tensor(values, dtype=torch.float64, device=self.args.device)
         totals = self.accelerator.reduce(totals, reduction="sum")
         count = max(float(totals[-1].item()), 1.0)
-        prefix = kwargs.get("metric_key_prefix", "eval")
+        prefix = eval_kwargs.get("metric_key_prefix", "eval")
         output.metrics.update(
             {f"{prefix}_papo_{name}": float(totals[index].item()) / count for index, name in enumerate(names)}
         )

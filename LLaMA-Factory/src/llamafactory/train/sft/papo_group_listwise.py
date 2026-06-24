@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Union
+from typing import Any, Union
 
 import torch
 import torch.nn.functional as F
@@ -164,3 +164,17 @@ def papo_group_listwise_loss(
         "policy_entropy": torch.stack(policy_entropies).mean().detach(),
     }
     return (loss, metrics) if return_metrics else loss
+
+
+def prepare_papo_group_eval_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    r"""Force grouped PAPO eval to loss-only mode.
+
+    Grouped PAPO validation needs only `eval_loss` plus the custom aggregated PAPO
+    metrics collected inside `compute_loss`. Returning full logits/labels from the
+    Hugging Face evaluation loop triggers large cross-rank gathers that are both
+    unnecessary and prone to long NCCL stalls on multimodal grouped batches.
+    """
+
+    eval_kwargs = dict(kwargs)
+    eval_kwargs["prediction_loss_only"] = True
+    return eval_kwargs
