@@ -192,6 +192,74 @@ class StrictTrainingProtocolTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "context leakage"):
             preflight.validate_training(project_config, training_path, training)
 
+    def test_preflight_accepts_proactive_fixed_clean_jsonl(self) -> None:
+        from papo.config import load_config
+
+        preflight = load_script("15_training_preflight.py")
+        config_path = self.root / "fixed_config.yaml"
+        config_path.write_text(
+            yaml.safe_dump(
+                {
+                    "data": {"protocol": {"protocol_id": "test_protocol"}},
+                }
+            ),
+            encoding="utf-8",
+        )
+        project_config = load_config(config_path)
+
+        info = {
+            "papo_proactive_oracle_sft_train": {"file_name": "proactive_fixed_clean/proactive_oracle_sft_train.jsonl"},
+            "papo_proactive_oracle_sft_eval": {"file_name": "proactive_fixed_clean/proactive_oracle_sft_eval.jsonl"},
+        }
+        clean_dir = self.dataset_dir / "proactive_fixed_clean"
+        clean_dir.mkdir()
+        (self.dataset_dir / "dataset_info.json").write_text(json.dumps(info), encoding="utf-8")
+
+        sample_train = {
+            "messages": [
+                {"from": "system", "value": "You are a personalized Android GUI agent. Output exactly one Chinese sentence."},
+                {"from": "human", "value": "<image>Infer the user's current intent."},
+                {"from": "gpt", "value": "打开微信查看消息"},
+            ],
+            "images": ["data/raw/fingertip20k/1/1.jpg"],
+            "metadata": {"task_id": "task-train", "group_id": "group-train", "user_id": "1"},
+        }
+        sample_eval = {
+            **sample_train,
+            "metadata": {"task_id": "task-eval", "group_id": "group-eval", "user_id": "1"},
+        }
+        (clean_dir / "proactive_oracle_sft_train.jsonl").write_text(
+            json.dumps(sample_train, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        (clean_dir / "proactive_oracle_sft_eval.jsonl").write_text(
+            json.dumps(sample_eval, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+        training = {
+            "model_name_or_path": "mock-model",
+            "dataset_dir": str(self.dataset_dir),
+            "dataset": "papo_proactive_oracle_sft_train",
+            "eval_dataset": "papo_proactive_oracle_sft_eval",
+            "val_size": 0.0,
+            "output_dir": str(self.root / "proactive_oracle_sft_fixed_clean_v2"),
+            "save_steps": 50,
+            "eval_steps": 50,
+            "save_strategy": "steps",
+            "eval_strategy": "steps",
+            "load_best_model_at_end": False,
+            "save_total_limit": None,
+            "seed": 42,
+            "data_seed": 42,
+        }
+        training_path = self.root / "fixed_training.yaml"
+        training_path.write_text(yaml.safe_dump(training), encoding="utf-8")
+        report = preflight.validate_training(project_config, training_path, training)
+        self.assertEqual(report["status"], "passed")
+        self.assertEqual(report["train_rows"], 1)
+        self.assertEqual(report["eval_rows"], 1)
+
     def test_best_checkpoint_selection_uses_lowest_eval_loss(self) -> None:
         finalizer = load_script("16_finalize_best_checkpoint.py")
         output = self.root / "run"
@@ -604,6 +672,116 @@ class StrictTrainingProtocolTest(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "dataset_info.json changed after training"):
             validate_proactive_adapter(adapter, config)
+
+    def test_proactive_adapter_accepts_fixed_dataset_names(self) -> None:
+        adapter = self.root / "adapter_fixed"
+        protocol = self.root / "protocol_fixed"
+        datasets = self.root / "datasets_fixed"
+        adapter.mkdir()
+        protocol.mkdir()
+        datasets.mkdir()
+        (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+        manifest = protocol / "protocol_manifest.json"
+        manifest.write_text(json.dumps({"status": "passed"}), encoding="utf-8")
+
+        clean_dir = datasets / "proactive_fixed_clean"
+        clean_dir.mkdir()
+        train_path = clean_dir / "proactive_oracle_sft_train.jsonl"
+        eval_path = clean_dir / "proactive_oracle_sft_eval.jsonl"
+        train_path.write_text("[]", encoding="utf-8")
+        eval_path.write_text("[]", encoding="utf-8")
+        dataset_info_path = datasets / "dataset_info.json"
+        dataset_info_path.write_text(
+            json.dumps(
+                {
+                    "papo_proactive_oracle_sft_train": {"file_name": "proactive_fixed_clean/proactive_oracle_sft_train.jsonl"},
+                    "papo_proactive_oracle_sft_eval": {"file_name": "proactive_fixed_clean/proactive_oracle_sft_eval.jsonl"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (adapter / "papo_training_provenance.json").write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "protocol_id": "test_protocol",
+                    "protocol_manifest_sha256": sha256_file(manifest),
+                    "dataset_dir": str(datasets),
+                    "datasets": ["papo_proactive_oracle_sft_train"],
+                    "eval_datasets": ["papo_proactive_oracle_sft_eval"],
+                    "dataset_hashes": {
+                        "papo_proactive_oracle_sft_train": sha256_file(train_path),
+                        "papo_proactive_oracle_sft_eval": sha256_file(eval_path),
+                    },
+                    "dataset_info_sha256": sha256_file(dataset_info_path),
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = {
+            "_project_root": str(self.root),
+            "paths": {
+                "protocol_dir": str(protocol),
+                "llamafactory_data_dir": str(datasets),
+            },
+            "data": {"protocol": {"protocol_id": "test_protocol"}},
+        }
+        provenance = validate_proactive_adapter(adapter, config)
+        self.assertEqual(provenance["datasets"], ["papo_proactive_oracle_sft_train"])
+
+    def test_proactive_adapter_accepts_fixed_dataset_without_manifest_hash(self) -> None:
+        adapter = self.root / "adapter_fixed_no_manifest"
+        protocol = self.root / "protocol_fixed_no_manifest"
+        datasets = self.root / "datasets_fixed_no_manifest"
+        adapter.mkdir()
+        protocol.mkdir()
+        datasets.mkdir()
+        (adapter / "adapter_model.safetensors").write_bytes(b"adapter")
+
+        clean_dir = datasets / "proactive_fixed_clean"
+        clean_dir.mkdir()
+        train_path = clean_dir / "proactive_oracle_sft_train.jsonl"
+        eval_path = clean_dir / "proactive_oracle_sft_eval.jsonl"
+        train_path.write_text("[]", encoding="utf-8")
+        eval_path.write_text("[]", encoding="utf-8")
+        dataset_info_path = datasets / "dataset_info.json"
+        dataset_info_path.write_text(
+            json.dumps(
+                {
+                    "papo_proactive_oracle_sft_train": {"file_name": "proactive_fixed_clean/proactive_oracle_sft_train.jsonl"},
+                    "papo_proactive_oracle_sft_eval": {"file_name": "proactive_fixed_clean/proactive_oracle_sft_eval.jsonl"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (adapter / "papo_training_provenance.json").write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "protocol_id": "test_protocol",
+                    "protocol_manifest_sha256": None,
+                    "dataset_dir": str(datasets),
+                    "datasets": ["papo_proactive_oracle_sft_train"],
+                    "eval_datasets": ["papo_proactive_oracle_sft_eval"],
+                    "dataset_hashes": {
+                        "papo_proactive_oracle_sft_train": sha256_file(train_path),
+                        "papo_proactive_oracle_sft_eval": sha256_file(eval_path),
+                    },
+                    "dataset_info_sha256": sha256_file(dataset_info_path),
+                }
+            ),
+            encoding="utf-8",
+        )
+        config = {
+            "_project_root": str(self.root),
+            "paths": {
+                "protocol_dir": str(protocol),
+                "llamafactory_data_dir": str(datasets),
+            },
+            "data": {"protocol": {"protocol_id": "test_protocol"}},
+        }
+        provenance = validate_proactive_adapter(adapter, config)
+        self.assertEqual(provenance["eval_datasets"], ["papo_proactive_oracle_sft_eval"])
 
     def write_dataset(self, name: str, partition: str, episode_ids: list[str]) -> None:
         info_path = self.dataset_dir / "dataset_info.json"

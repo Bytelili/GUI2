@@ -175,6 +175,17 @@ def dataset_info() -> dict[str, Any]:
             "system_tag": "system",
         },
     }
+    mllm_from_value = {
+        "formatting": "sharegpt",
+        "columns": {"messages": "messages", "images": "images"},
+        "tags": {
+            "role_tag": "from",
+            "content_tag": "value",
+            "user_tag": "human",
+            "assistant_tag": "gpt",
+            "system_tag": "system",
+        },
+    }
     result: dict[str, Any] = {}
     for partition in ["train", "eval"]:
         result[f"papo_proactive_{partition}_sft"] = {
@@ -182,23 +193,23 @@ def dataset_info() -> dict[str, Any]:
             **mllm,
         }
         result[f"papo_proactive_oracle_sft_{partition}"] = {
-            "file_name": f"proactive_fixed/proactive_oracle_sft_{partition}.jsonl",
-            **mllm,
+            "file_name": f"proactive_fixed_clean/proactive_oracle_sft_{partition}.jsonl",
+            **mllm_from_value,
         }
         result[f"papo_proactive_rerank_{partition}"] = {
-            "file_name": f"proactive_fixed/proactive_rerank_{partition}.jsonl",
-            **mllm,
+            "file_name": f"proactive_fixed_clean/proactive_rerank_{partition}.jsonl",
+            **mllm_from_value,
         }
         result[f"papo_proactive_weighted_listwise_{partition}"] = {
-            "file_name": f"proactive_fixed/proactive_weighted_listwise_{partition}.jsonl",
-            **mllm,
+            "file_name": f"proactive_fixed_clean/proactive_weighted_listwise_{partition}.jsonl",
+            **mllm_from_value,
             "columns": {
-                **mllm["columns"],
+                **mllm_from_value["columns"],
                 "listwise_weight": "papo_listwise_weight",
             },
         }
         result[f"papo_proactive_dpo_{partition}"] = {
-            "file_name": f"proactive_fixed/proactive_dpo_{partition}.jsonl",
+            "file_name": f"proactive_fixed_clean/proactive_dpo_{partition}.jsonl",
             "ranking": True,
             "formatting": "sharegpt",
             "columns": {
@@ -209,6 +220,7 @@ def dataset_info() -> dict[str, Any]:
                 "preference_weight": "papo_weight",
                 "preference_target": "papo_target_probability",
             },
+            "tags": mllm_from_value["tags"],
         }
         result[f"papo_execution_{partition}_sft"] = {
             "file_name": f"papo_execution_{partition}_sft.json",

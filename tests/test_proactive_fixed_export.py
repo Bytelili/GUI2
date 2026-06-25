@@ -7,9 +7,12 @@ from src.papo.proactive_fixed_export import (
     RerankExportConfig,
     WeightedListwiseExportConfig,
     audit_wide_rows,
+    clean_prompt_text,
+    compute_soft_target,
     export_dpo_rows,
     export_rerank_rows,
     export_weighted_listwise_rows,
+    relativize_image_paths,
 )
 
 
@@ -61,6 +64,28 @@ class ProactiveFixedExportTest(unittest.TestCase):
         warning_text = "\n".join(report["warnings"])
         self.assertIn("oracle_prob has a single unique value", warning_text)
         self.assertIn("dpo_rejected_count is all zero", warning_text)
+
+    def test_clean_prompt_text_splits_system_and_user(self) -> None:
+        system, user = clean_prompt_text(
+            "[system] You are a personalized Android GUI agent. Output exactly one Chinese sentence.\n"
+            "[user] <image><image>Infer the user's current intent.\nTime: 20250309_120000"
+        )
+        self.assertNotIn("[system]", system)
+        self.assertNotIn("[user]", user)
+        self.assertIn("You are a personalized Android GUI agent", system)
+        self.assertTrue(user.startswith("<image><image>Infer the user's current intent."))
+
+    def test_soft_target_and_relative_images(self) -> None:
+        target = compute_soft_target(0.3, beta=0.1, min_target=0.55, max_target=0.98)
+        self.assertGreaterEqual(target, 0.55)
+        self.assertLessEqual(target, 0.98)
+        images, changed = relativize_image_paths(
+            ["/home/dumike/zyy/GUI/data/raw/fingertip20k/1/a.jpg", "data/raw/fingertip20k/1/b.jpg"],
+            "/home/dumike/zyy/GUI",
+        )
+        self.assertEqual(images[0], "data/raw/fingertip20k/1/a.jpg")
+        self.assertEqual(images[1], "data/raw/fingertip20k/1/b.jpg")
+        self.assertEqual(changed, 1)
 
 
 def _sample_row(

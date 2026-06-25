@@ -76,7 +76,7 @@ def _training_config(
         "val_size": 0.0,
         "output_dir": _join_path(checkpoint_root, run_name),
         "logging_dir": _join_path(logging_root, run_name),
-        "logging_steps": 10,
+        "logging_steps": int(section.get("logging_steps", 10)),
         "eval_strategy": "steps",
         "eval_steps": eval_steps,
         "save_strategy": "steps",

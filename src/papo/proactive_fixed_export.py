@@ -35,6 +35,10 @@ ORACLE_SOURCE = "oracle"
 SAME_USER_SOURCE = "same_user"
 CONTEXT_SOURCE = "context"
 
+PROMPT_TAG_PATTERN = re.compile(r"(?im)^\s*\[(system|user)\]\s*")
+SYSTEM_USER_PROMPT_PATTERN = re.compile(r"^\s*\[system\]\s*(.*?)\s*\[user\]\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+USER_ONLY_PROMPT_PATTERN = re.compile(r"^\s*\[user\]\s*(.*)\s*$", re.IGNORECASE | re.DOTALL)
+
 
 @dataclass(frozen=True)
 class DPOExportConfig:
@@ -71,6 +75,86 @@ class WeightedListwiseExportConfig:
 def read_wide_csv(path: str | Path) -> list[dict[str, Any]]:
     rows = read_csv_rows(path)
     return [_normalize_wide_row(row) for row in rows]
+
+
+def read_jsonish_rows(path: str | Path) -> list[dict[str, Any]]:
+    text = Path(path).read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        data = json.loads(text)
+        if not isinstance(data, list):
+            raise ValueError(f"Expected a JSON list in {path}")
+        return [row for row in data if isinstance(row, dict)]
+
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def clean_prompt_text(text: str, default_system: str = SFT_SYSTEM_PROMPT) -> tuple[str, str]:
+    original = str(text or "").replace("\r\n", "\n").strip()
+    if not original:
+        return default_system, "Infer the user's current intent. Output exactly one Chinese sentence."
+
+    system_text = default_system
+    user_text = original
+
+    both = SYSTEM_USER_PROMPT_PATTERN.match(original)
+    if both:
+        system_text = both.group(1).strip() or default_system
+        user_text = both.group(2).strip()
+    else:
+        user_only = USER_ONLY_PROMPT_PATTERN.match(original)
+        if user_only:
+            user_text = user_only.group(1).strip()
+
+    system_text = _strip_prompt_tags(system_text) or default_system
+    user_text = _strip_prompt_tags(user_text).strip()
+    if not user_text:
+        user_text = _strip_prompt_tags(original).strip() or "Infer the user's current intent. Output exactly one Chinese sentence."
+    return system_text, user_text
+
+
+def compute_soft_target(
+    reward_gap: float,
+    beta: float = 0.1,
+    min_target: float = 0.55,
+    max_target: float = 0.98,
+) -> float:
+    target = 1.0 / (1.0 + math.exp(-(float(reward_gap) / beta)))
+    return min(max(target, min_target), max_target)
+
+
+def relativize_image_path(path: str, image_root: str | Path) -> tuple[str, bool]:
+    image_path = str(path or "").strip()
+    root = str(image_root or "").strip()
+    if not image_path or not root:
+        return image_path, False
+
+    normalized_path = image_path.replace("\\", "/")
+    normalized_root = root.replace("\\", "/").rstrip("/")
+    if normalized_path == normalized_root:
+        return ".", True
+    prefix = normalized_root + "/"
+    if normalized_path.startswith(prefix):
+        return normalized_path[len(prefix) :], True
+    return image_path, False
+
+
+def relativize_image_paths(paths: Iterable[str], image_root: str | Path) -> tuple[list[str], int]:
+    cleaned: list[str] = []
+    changed = 0
+    for item in paths:
+        relative, updated = relativize_image_path(str(item), image_root)
+        cleaned.append(relative)
+        changed += int(updated)
+    return cleaned, changed
 
 
 def audit_wide_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -530,6 +614,8 @@ def export_weighted_listwise_rows(
 def validate_sft_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     issues: list[str] = []
     leak_count = 0
+    tagged_prompt_count = 0
+    missing_intent_instruction = 0
     user_ids: Counter[str] = Counter()
     intent_classes: Counter[str] = Counter()
     for index, row in enumerate(rows):
@@ -537,14 +623,18 @@ def validate_sft_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         if not isinstance(messages, list) or len(messages) < 3:
             issues.append(f"sft[{index}] missing messages")
             continue
-        user_prompt = str(messages[1].get("content") or "")
-        assistant = str(messages[2].get("content") or "")
+        user_prompt = _message_text(messages[1])
+        assistant = _message_text(messages[2])
         if not assistant.strip():
             issues.append(f"sft[{index}] empty assistant content")
         if row.get("images") is None or not isinstance(row.get("images"), list):
             issues.append(f"sft[{index}] images is not a list")
         if normalize_text(assistant) and normalize_text(assistant) in normalize_text(user_prompt):
             leak_count += 1
+        if "[system]" in user_prompt.lower() or "[user]" in user_prompt.lower():
+            tagged_prompt_count += 1
+        if "Infer the user's current intent" not in user_prompt:
+            missing_intent_instruction += 1
         metadata = row.get("metadata", {})
         user_ids[str(metadata.get("user_id") or "")] += 1
         intent_classes[str(metadata.get("intent_class") or "")] += 1
@@ -553,6 +643,8 @@ def validate_sft_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "user_count": len([user for user in user_ids if user]),
         "intent_class_distribution": dict(intent_classes),
         "oracle_prompt_leak_count": leak_count,
+        "prompt_tag_count": tagged_prompt_count,
+        "missing_intent_instruction_count": missing_intent_instruction,
         "issues": issues,
         "passed": not issues,
     }
@@ -566,10 +658,11 @@ def validate_dpo_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     future_leaks = 0
     pair_keys: Counter[tuple[str, str, str]] = Counter()
     weights: list[float] = []
+    targets: list[float] = []
 
     for index, row in enumerate(rows):
-        chosen = str(((row.get("chosen") or {}).get("content")) or "")
-        rejected = str(((row.get("rejected") or {}).get("content")) or "")
+        chosen = _message_text(row.get("chosen") or {})
+        rejected = _message_text(row.get("rejected") or {})
         if not chosen or not rejected or normalize_text(chosen) == normalize_text(rejected):
             issues.append(f"dpo[{index}] chosen/rejected invalid")
             continue
@@ -580,7 +673,14 @@ def validate_dpo_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         char_similarity_value = float(metadata.get("char_similarity") or 0.0)
         reward_gaps.append(reward_gap)
         char_similarities.append(char_similarity_value)
-        weights.append(float(row.get("papo_weight") or 0.0))
+        weight = float(row.get("papo_weight") or 0.0)
+        target = float(row.get("papo_target_probability") or 0.0)
+        weights.append(weight)
+        targets.append(target)
+        if not 0.5 <= weight <= 3.0:
+            issues.append(f"dpo[{index}] papo_weight out of range")
+        if not 0.55 <= target <= 0.98:
+            issues.append(f"dpo[{index}] papo_target_probability out of range")
         target_time = str(metadata.get("target_time") or row.get("target_time") or "")
         source_time = str(metadata.get("negative_source_time") or metadata.get("source_time") or "")
         if negative_type.startswith("same_user") and source_time and target_time and source_time >= target_time:
@@ -588,6 +688,10 @@ def validate_dpo_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         pair_keys[(str(metadata.get("task_id") or ""), chosen, rejected)] += 1
 
     duplicate_pairs = sum(count - 1 for count in pair_keys.values() if count > 1)
+    if targets and len({round(value, 6) for value in targets}) == 1:
+        issues.append("all papo_target_probability values are identical")
+    if negative_types and len(negative_types) == 1:
+        issues.append("negative_type has a single category")
     return {
         "rows": len(rows),
         "same_user_hard_negative_count": negative_types[SAME_USER_HARD_NEGATIVE],
@@ -596,6 +700,7 @@ def validate_dpo_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "negative_type_distribution": dict(negative_types),
         "reward_gap_distribution": summarize_numbers(reward_gaps),
         "papo_weight_distribution": summarize_numbers(weights),
+        "papo_target_probability_distribution": summarize_numbers(targets),
         "average_char_similarity": _mean(char_similarities),
         "average_reward_gap": _mean(reward_gaps),
         "same_user_future_leak_ratio": future_leaks / len(rows) if rows else 0.0,
@@ -611,7 +716,7 @@ def validate_rerank_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     oracle_positions = Counter()
     for index, row in enumerate(rows):
         messages = row.get("messages") or []
-        assistant = str(messages[-1].get("content") or "") if messages else ""
+        assistant = _message_text(messages[-1]) if messages else ""
         answer_counts[assistant] += 1
         metadata = row.get("metadata", {})
         candidate_order = list(metadata.get("candidate_order") or [])
@@ -677,6 +782,11 @@ def validate_weighted_listwise_rows(rows: list[dict[str, Any]]) -> dict[str, Any
     for group_id, total in group_sums.items():
         if abs(total - 1.0) > 1e-6:
             issues.append(f"group {group_id} probability sum is {total:.6f}")
+    oracle_unique = {round(weight, 6) for weight in source_weights[ORACLE_SOURCE]}
+    if source_weights[ORACLE_SOURCE] and len(oracle_unique) == 1:
+        issues.append("oracle weights are fixed across all rows")
+    if source_weights[CONTEXT_SOURCE] and all(weight <= 0.0 for weight in source_weights[CONTEXT_SOURCE]):
+        issues.append("context weights are always zero")
     return {
         "rows": len(rows),
         "groups": len(group_sums),
@@ -747,6 +857,16 @@ def _parse_image_paths(value: str) -> list[str]:
     if isinstance(parsed, list):
         return [str(item) for item in parsed if str(item)]
     return [str(parsed)]
+
+
+def _message_text(message: dict[str, Any]) -> str:
+    if not isinstance(message, dict):
+        return ""
+    return str(message.get("value") or message.get("content") or "")
+
+
+def _strip_prompt_tags(text: str) -> str:
+    return PROMPT_TAG_PATTERN.sub("", str(text or "")).strip()
 
 
 def _candidate_dpo_negatives(row: dict[str, Any], config: DPOExportConfig) -> list[dict[str, Any]]:

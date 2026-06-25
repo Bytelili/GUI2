@@ -15,6 +15,28 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from papo.config import config_path, load_config  # noqa: E402
 from papo.data_protocol import sha256_file  # noqa: E402
 from papo.official_data import read_csv_rows  # noqa: E402
+from papo.proactive_fixed_export import (  # noqa: E402
+    read_jsonish_rows,
+    validate_dpo_rows,
+    validate_rerank_rows,
+    validate_sft_rows,
+    validate_weighted_listwise_rows,
+)
+
+
+PROACTIVE_FIXED_TRAIN_DATASETS = {
+    "papo_proactive_oracle_sft_train",
+    "papo_proactive_dpo_train",
+    "papo_proactive_rerank_train",
+    "papo_proactive_weighted_listwise_train",
+}
+PROACTIVE_FIXED_EVAL_DATASETS = {
+    "papo_proactive_oracle_sft_eval",
+    "papo_proactive_dpo_eval",
+    "papo_proactive_rerank_eval",
+    "papo_proactive_weighted_listwise_eval",
+}
+PROACTIVE_FIXED_DATASETS = PROACTIVE_FIXED_TRAIN_DATASETS | PROACTIVE_FIXED_EVAL_DATASETS
 
 
 def main() -> None:
@@ -59,6 +81,7 @@ def validate_training(
 ) -> dict[str, Any]:
     dataset_names = _names(training.get("dataset"))
     eval_names = _names(training.get("eval_dataset"))
+    is_proactive_fixed = all(name in PROACTIVE_FIXED_DATASETS for name in dataset_names + eval_names)
     if not dataset_names or not eval_names:
         raise ValueError("Formal training requires explicit dataset and eval_dataset")
     if float(training.get("val_size", 0.0) or 0.0) != 0.0:
@@ -79,21 +102,26 @@ def validate_training(
     if adopt_completed_run and save_total_limit not in {None, 0, 1, 2, 3}:
         raise ValueError("Completed-run adoption only permits save_total_limit values 1, 2, or 3")
 
-    protocol_dir = config_path(project_config, "paths.protocol_dir")
-    manifest_path = protocol_dir / "protocol_manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("status") != "passed":
-        raise ValueError("Protocol manifest status is not passed")
-    _verify_protocol_hashes(project_config, protocol_dir, manifest)
-
     dataset_dir = Path(str(training["dataset_dir"]))
     info = json.loads((dataset_dir / "dataset_info.json").read_text(encoding="utf-8"))
     train_rows, train_hashes = _load_datasets(dataset_dir, info, dataset_names)
     eval_rows, eval_hashes = _load_datasets(dataset_dir, info, eval_names)
     protocol_id = str(project_config["data"]["protocol"]["protocol_id"])
-    _validate_rows(train_rows, "train", protocol_id)
-    _validate_rows(eval_rows, "eval", protocol_id)
-    _validate_no_leakage(project_config, dataset_names + eval_names, train_rows, eval_rows)
+    if is_proactive_fixed:
+        manifest_path = None
+        _validate_proactive_fixed_rows(dataset_names, train_rows, "train")
+        _validate_proactive_fixed_rows(eval_names, eval_rows, "eval")
+        _validate_proactive_fixed_no_overlap(train_rows, eval_rows)
+    else:
+        protocol_dir = config_path(project_config, "paths.protocol_dir")
+        manifest_path = protocol_dir / "protocol_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("status") != "passed":
+            raise ValueError("Protocol manifest status is not passed")
+        _verify_protocol_hashes(project_config, protocol_dir, manifest)
+        _validate_rows(train_rows, "train", protocol_id)
+        _validate_rows(eval_rows, "eval", protocol_id)
+        _validate_no_leakage(project_config, dataset_names + eval_names, train_rows, eval_rows)
     _validate_adapter(training)
     completed_run = _validate_completed_run(output_dir) if adopt_completed_run else None
 
@@ -108,7 +136,7 @@ def validate_training(
         "dataset_hashes": {**train_hashes, **eval_hashes},
         "train_rows": len(train_rows),
         "eval_rows": len(eval_rows),
-        "protocol_manifest_sha256": sha256_file(manifest_path),
+        "protocol_manifest_sha256": sha256_file(manifest_path) if manifest_path is not None else None,
         "adapter_provenance": _adapter_provenance(training),
         "completed_run_adoption": completed_run,
     }
@@ -137,12 +165,57 @@ def _load_datasets(
         if name not in info:
             raise KeyError(f"Dataset is missing from dataset_info.json: {name}")
         path = dataset_dir / info[name]["file_name"]
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = read_jsonish_rows(path)
         if not data:
             raise ValueError(f"Formal dataset is empty: {name}")
         rows.extend(data)
         hashes[name] = sha256_file(path)
     return rows, hashes
+
+
+def _validate_proactive_fixed_rows(dataset_names: list[str], rows: list[dict[str, Any]], partition: str) -> None:
+    failures: list[str] = []
+    for name in dataset_names:
+        if name.endswith("_oracle_sft_train") or name.endswith("_oracle_sft_eval"):
+            report = validate_sft_rows(rows)
+            if not report.get("passed"):
+                failures.extend(report.get("issues", []))
+            if report.get("prompt_tag_count"):
+                failures.append(f"{name} still contains [system]/[user] tags")
+        elif name.endswith("_rerank_train") or name.endswith("_rerank_eval"):
+            report = validate_rerank_rows(rows)
+            if not report.get("passed"):
+                failures.extend(report.get("issues", []))
+            prompt_failures = _count_bad_prompts(rows)
+            if prompt_failures:
+                failures.append(f"{name} has {prompt_failures} dirty prompts")
+        elif name.endswith("_weighted_listwise_train") or name.endswith("_weighted_listwise_eval"):
+            report = validate_weighted_listwise_rows(rows)
+            if not report.get("passed"):
+                failures.extend(report.get("issues", []))
+            prompt_failures = _count_bad_prompts(rows)
+            if prompt_failures:
+                failures.append(f"{name} has {prompt_failures} dirty prompts")
+        elif name.endswith("_dpo_train") or name.endswith("_dpo_eval"):
+            report = validate_dpo_rows(rows)
+            if not report.get("passed"):
+                failures.extend(report.get("issues", []))
+            prompt_failures = _count_bad_conversation_prompts(rows)
+            if prompt_failures:
+                failures.append(f"{name} has {prompt_failures} dirty prompts")
+    if failures:
+        raise ValueError(f"{partition} proactive_fixed validation failed: {failures[:5]}")
+
+
+def _validate_proactive_fixed_no_overlap(
+    train_rows: list[dict[str, Any]],
+    eval_rows: list[dict[str, Any]],
+) -> None:
+    train_ids = {_proactive_fixed_row_id(row) for row in train_rows}
+    eval_ids = {_proactive_fixed_row_id(row) for row in eval_rows}
+    overlap = {item for item in train_ids & eval_ids if item}
+    if overlap:
+        raise ValueError(f"proactive_fixed train/eval overlap detected: {len(overlap)} rows")
 
 
 def _validate_rows(rows: list[dict[str, Any]], partition: str, protocol_id: str) -> None:
@@ -288,6 +361,42 @@ def _episode_id(row: dict[str, Any]) -> str:
 
 def _episode_time(episode_id: str) -> str:
     return episode_id.split("__", 1)[1] if "__" in episode_id else ""
+
+
+def _proactive_fixed_row_id(row: dict[str, Any]) -> str:
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    return str(
+        metadata.get("group_id")
+        or metadata.get("task_id")
+        or metadata.get("papo_episode_id")
+        or metadata.get("user_id")
+    )
+
+
+def _count_bad_prompts(rows: list[dict[str, Any]]) -> int:
+    bad = 0
+    for row in rows:
+        messages = row.get("messages") or []
+        if len(messages) < 2:
+            bad += 1
+            continue
+        prompt = str(messages[1].get("value") or messages[1].get("content") or "")
+        if "[system]" in prompt.lower() or "[user]" in prompt.lower():
+            bad += 1
+    return bad
+
+
+def _count_bad_conversation_prompts(rows: list[dict[str, Any]]) -> int:
+    bad = 0
+    for row in rows:
+        messages = row.get("conversations") or []
+        if len(messages) < 2:
+            bad += 1
+            continue
+        prompt = str(messages[1].get("value") or messages[1].get("content") or "")
+        if "[system]" in prompt.lower() or "[user]" in prompt.lower():
+            bad += 1
+    return bad
 
 
 def _names(value: Any) -> list[str]:

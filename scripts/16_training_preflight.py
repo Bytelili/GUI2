@@ -345,7 +345,11 @@ class Audit:
             valid = all(
                 isinstance(row.get("messages"), list)
                 and len(row.get("messages", [])) >= 3
-                and str(row.get("messages", [])[-1].get("content") or "").strip()
+                and str(
+                    row.get("messages", [])[-1].get("value")
+                    or row.get("messages", [])[-1].get("content")
+                    or ""
+                ).strip()
                 for row in train_rows[: min(len(train_rows), 100)]
             )
             self.check("proactive_fixed_sft_shape", valid, {"sampled_rows": min(len(train_rows), 100)})
@@ -353,8 +357,8 @@ class Audit:
             valid = all(
                 row.get("chosen")
                 and row.get("rejected")
-                and str((row.get("chosen") or {}).get("content") or "").strip()
-                != str((row.get("rejected") or {}).get("content") or "").strip()
+                and str((row.get("chosen") or {}).get("value") or (row.get("chosen") or {}).get("content") or "").strip()
+                != str((row.get("rejected") or {}).get("value") or (row.get("rejected") or {}).get("content") or "").strip()
                 for row in train_rows[: min(len(train_rows), 100)]
             )
             self.check("proactive_fixed_dpo_shape", valid, {"sampled_rows": min(len(train_rows), 100)})

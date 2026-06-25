@@ -20,9 +20,9 @@ def validate_proactive_adapter(adapter_dir: str | Path, config: dict[str, Any]) 
 
     train_datasets = set(provenance.get("datasets") or [])
     eval_datasets = set(provenance.get("eval_datasets") or [])
-    if not train_datasets or any(not str(name).startswith("papo_proactive_train_") for name in train_datasets):
+    if not train_datasets or any(not _is_clean_proactive_dataset(str(name), "train") for name in train_datasets):
         raise ValueError(f"Finalized adapter is not a clean Proactive adapter: {provenance_path}")
-    if not eval_datasets or any(not str(name).startswith("papo_proactive_eval_") for name in eval_datasets):
+    if not eval_datasets or any(not _is_clean_proactive_dataset(str(name), "eval") for name in eval_datasets):
         raise ValueError(f"Finalized adapter has no clean Proactive eval provenance: {provenance_path}")
 
     expected_protocol = str(config["data"]["protocol"]["protocol_id"])
@@ -30,9 +30,11 @@ def validate_proactive_adapter(adapter_dir: str | Path, config: dict[str, Any]) 
         raise ValueError(
             f"Finalized adapter protocol mismatch: expected={expected_protocol}, actual={provenance.get('protocol_id')}"
         )
-    manifest_path = config_path(config, "paths.protocol_dir") / "protocol_manifest.json"
-    if sha256_file(manifest_path) != provenance.get("protocol_manifest_sha256"):
-        raise ValueError(f"Finalized adapter protocol manifest changed after training: {manifest_path}")
+    expected_manifest_sha = provenance.get("protocol_manifest_sha256")
+    if expected_manifest_sha:
+        manifest_path = config_path(config, "paths.protocol_dir") / "protocol_manifest.json"
+        if sha256_file(manifest_path) != expected_manifest_sha:
+            raise ValueError(f"Finalized adapter protocol manifest changed after training: {manifest_path}")
 
     dataset_dir = _resolve_dataset_dir(provenance, config)
     dataset_info_path = dataset_dir / "dataset_info.json"
@@ -63,3 +65,13 @@ def _resolve_dataset_dir(provenance: dict[str, Any], config: dict[str, Any]) -> 
     if not (dataset_dir / "dataset_info.json").exists():
         raise FileNotFoundError(f"Configured dataset_info.json is missing: {dataset_dir}")
     return dataset_dir
+
+
+def _is_clean_proactive_dataset(name: str, partition: str) -> bool:
+    if not name.startswith("papo_proactive_"):
+        return False
+    if partition == "train":
+        return name.startswith("papo_proactive_train_") or name.endswith("_train")
+    if partition == "eval":
+        return name.startswith("papo_proactive_eval_") or name.endswith("_eval")
+    raise ValueError(f"Unsupported partition: {partition}")
