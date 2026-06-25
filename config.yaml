@@ -98,6 +98,7 @@ training:
   image_max_pixels: 262144
   lora_rank: 16
   proactive_oracle_sft_fixed:
+    stage: sft
     output_name: proactive_oracle_sft_fixed_clean_v2
     epochs: 3
     learning_rate: 1.0e-4
@@ -106,21 +107,31 @@ training:
     gradient_accumulation_steps: 2
     gradient_checkpointing: false
     eval_steps: 50
+    save_steps: 50
     logging_steps: 5
+    lora_rank: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
   proactive_dpo_fixed:
+    stage: dpo
     output_name: proactive_dpo_fixed_clean_v2
     epochs: 2
     learning_rate: 5.0e-6
     pref_beta: 0.1
     pref_loss: papo
-    adapter_name_or_path: /home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo/proactive_oracle_sft_fixed_clean_v2_best
+    adapter_name_or_path: proactive_oracle_sft_fixed_clean_v2_best
     per_device_train_batch_size: 1
     per_device_eval_batch_size: 1
     gradient_accumulation_steps: 16
     gradient_checkpointing: true
-    eval_steps: 25
+    eval_steps: 10
+    save_steps: 25
     logging_steps: 5
+    lora_rank: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
   proactive_rerank_fixed:
+    stage: sft
     output_name: proactive_rerank_fixed_clean_v2
     epochs: 2
     learning_rate: 5.0e-5
@@ -129,19 +140,28 @@ training:
     gradient_accumulation_steps: 2
     gradient_checkpointing: false
     eval_steps: 50
+    save_steps: 50
     logging_steps: 5
+    lora_rank: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
   proactive_weighted_listwise_fixed:
+    stage: sft
     output_name: proactive_weighted_listwise_fixed_clean_v2
     epochs: 2
     learning_rate: 1.0e-5
     use_papo_listwise: true
-    adapter_name_or_path: /home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo/proactive_oracle_sft_fixed_clean_v2_best
+    adapter_name_or_path: proactive_oracle_sft_fixed_clean_v2_best
     per_device_train_batch_size: 2
     per_device_eval_batch_size: 2
     gradient_accumulation_steps: 8
     gradient_checkpointing: true
     eval_steps: 25
+    save_steps: 25
     logging_steps: 5
+    lora_rank: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
   proactive_sft:
     epochs: 3
     learning_rate: 0.0001

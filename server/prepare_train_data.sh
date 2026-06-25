@@ -28,6 +28,14 @@ PAPO_WORK_DIR="$(resolve_config_path paths.work_dir)"
 mkdir -p "$TRAIN_DATA_DIR"
 ln -sfn "$PAPO_RAW_ROOT" "$TRAIN_DATA_DIR/RawDataset"
 
+if [[ -d "$ROOT_DIR/data/proactive_fixed_clean" ]]; then
+  echo "[prepare] Syncing proactive_fixed_clean into LLaMA-Factory data dir..."
+  mkdir -p "$TRAIN_DATA_DIR/proactive_fixed_clean"
+  rsync -a "$ROOT_DIR/data/proactive_fixed_clean/" "$TRAIN_DATA_DIR/proactive_fixed_clean/"
+else
+  echo "[prepare] proactive_fixed_clean not found, skipping fixed proactive data sync."
+fi
+
 python "$ROOT_DIR/scripts/12_validate_config_paths.py" \
   --config "$CONFIG_PATH" \
   --create_output_dirs

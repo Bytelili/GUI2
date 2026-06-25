@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-from src.papo.proactive_fixed_export import (
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from papo.proactive_fixed_export import (  # noqa: E402
     DPOExportConfig,
     RerankExportConfig,
     WeightedListwiseExportConfig,
@@ -10,6 +16,7 @@ from src.papo.proactive_fixed_export import (
     clean_prompt_text,
     compute_soft_target,
     export_dpo_rows,
+    export_oracle_sft_rows,
     export_rerank_rows,
     export_weighted_listwise_rows,
     relativize_image_paths,
@@ -17,13 +24,26 @@ from src.papo.proactive_fixed_export import (
 
 
 class ProactiveFixedExportTest(unittest.TestCase):
+    def test_oracle_sft_export_uses_from_value_schema(self) -> None:
+        rows, report = export_oracle_sft_rows([_sample_row()])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["messages"][0]["from"], "system")
+        self.assertEqual(rows[0]["messages"][1]["from"], "human")
+        self.assertEqual(rows[0]["messages"][2]["from"], "gpt")
+        self.assertEqual(rows[0]["messages"][2]["value"], "打开淘宝搜索蓝牙耳机")
+        self.assertEqual(report["status"], "passed")
+
     def test_dpo_pair_generation(self) -> None:
         rows, report = export_dpo_rows([_sample_row()], DPOExportConfig())
         self.assertGreaterEqual(len(rows), 1)
-        self.assertEqual(rows[0]["chosen"]["content"], "打开淘宝搜索蓝牙耳机")
-        self.assertNotEqual(rows[0]["chosen"]["content"], rows[0]["rejected"]["content"])
+        self.assertEqual(rows[0]["chosen"]["from"], "gpt")
+        self.assertEqual(rows[0]["rejected"]["from"], "gpt")
+        self.assertEqual(rows[0]["chosen"]["value"], "打开淘宝搜索蓝牙耳机")
+        self.assertNotEqual(rows[0]["chosen"]["value"], rows[0]["rejected"]["value"])
         self.assertIn("negative_type", rows[0]["metadata"])
         self.assertGreater(rows[0]["papo_weight"], 0.0)
+        self.assertGreater(rows[0]["papo_target_probability"], 0.55)
+        self.assertLessEqual(rows[0]["papo_target_probability"], 0.98)
         self.assertEqual(report["status"], "passed")
 
     def test_rerank_export(self) -> None:
@@ -32,9 +52,9 @@ class ProactiveFixedExportTest(unittest.TestCase):
         metadata = rows[0]["metadata"]
         candidate_order = metadata["candidate_order"]
         self.assertGreaterEqual(len(candidate_order), 2)
-        self.assertIn(rows[0]["messages"][-1]["content"], {"A", "B", "C", "D"})
+        self.assertIn(rows[0]["messages"][-1]["value"], {"A", "B", "C", "D"})
         self.assertIn("oracle", candidate_order)
-        correct_letter = rows[0]["messages"][-1]["content"]
+        correct_letter = rows[0]["messages"][-1]["value"]
         self.assertEqual(metadata["correct_letter"], correct_letter)
 
     def test_weighted_listwise_export(self) -> None:

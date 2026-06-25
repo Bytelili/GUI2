@@ -29,6 +29,28 @@ DATASETS = {
 }
 
 
+def _default_adapter_name(name: str, stage: str, section: dict[str, Any]) -> str | None:
+    explicit = section.get("adapter_name_or_path")
+    if explicit:
+        return str(explicit)
+    if name == "proactive_dpo_fixed":
+        return "proactive_oracle_sft_fixed_clean_v2_best"
+    if name == "proactive_weighted_listwise_fixed":
+        return "proactive_oracle_sft_fixed_clean_v2_best"
+    if name == "execution_dpo":
+        return "execution_listwise_clean_v2_best"
+    if name == "execution_listwise":
+        return "execution_sft_clean_v2_best"
+    return None
+
+
+def _resolve_adapter_path(checkpoint_root: str, adapter_name: str) -> str:
+    adapter_path = Path(adapter_name)
+    if adapter_path.is_absolute():
+        return str(adapter_path)
+    return _join_path(checkpoint_root, adapter_name)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Render strict LLaMA-Factory YAML files from config.yaml.")
     parser.add_argument("--config", default=str(PROJECT_ROOT / "config.yaml"))
@@ -57,16 +79,20 @@ def _training_config(
     logging_root = _portable_path(config, "logging_root")
     model_path = str(config.get("paths", {}).get("qwen_model_path") or training["model_name_or_path"])
     run_name = str(section.get("output_name") or f"{name}_clean_v2")
+    rendered_stage = str(section.get("stage", stage))
     eval_steps = int(section["eval_steps"])
+    save_steps = int(section.get("save_steps", eval_steps))
     result: dict[str, Any] = {
         "model_name_or_path": model_path,
         "image_max_pixels": training["image_max_pixels"],
         "trust_remote_code": True,
-        "stage": stage,
+        "stage": rendered_stage,
         "do_train": True,
         "do_eval": True,
         "finetuning_type": "lora",
-        "lora_rank": training["lora_rank"],
+        "lora_rank": int(section.get("lora_rank", training["lora_rank"])),
+        "lora_alpha": int(section.get("lora_alpha", training.get("lora_alpha", 32))),
+        "lora_dropout": float(section.get("lora_dropout", training.get("lora_dropout", 0.0))),
         "lora_target": "all",
         "dataset_dir": _portable_path(config, "llamafactory_data_dir"),
         "dataset": dataset,
@@ -80,7 +106,7 @@ def _training_config(
         "eval_strategy": "steps",
         "eval_steps": eval_steps,
         "save_strategy": "steps",
-        "save_steps": eval_steps,
+        "save_steps": save_steps if rendered_stage != "dpo" else eval_steps,
         "save_only_model": False,
         "load_best_model_at_end": False,
         "plot_loss": True,
@@ -100,17 +126,16 @@ def _training_config(
         "preprocessing_num_workers": 16,
         "ddp_timeout": 7200,
     }
-    if stage == "dpo":
+    adapter_name = _default_adapter_name(name, rendered_stage, section)
+    if rendered_stage == "dpo":
         result["pref_beta"] = section["pref_beta"]
         result["pref_loss"] = section.get("pref_loss", "sigmoid")
-        result["adapter_name_or_path"] = str(
-            section.get("adapter_name_or_path") or _join_path(checkpoint_root, "execution_listwise_clean_v2_best")
-        )
+        if adapter_name:
+            result["adapter_name_or_path"] = _resolve_adapter_path(checkpoint_root, adapter_name)
     if section.get("use_papo_listwise", False):
         result["use_papo_listwise"] = True
-        result["adapter_name_or_path"] = str(
-            section.get("adapter_name_or_path") or _join_path(checkpoint_root, "execution_sft_clean_v2_best")
-        )
+        if adapter_name:
+            result["adapter_name_or_path"] = _resolve_adapter_path(checkpoint_root, adapter_name)
     return result
 
 

@@ -324,12 +324,13 @@ def export_oracle_sft_rows(rows: Iterable[dict[str, Any]]) -> tuple[list[dict[st
         if not oracle:
             dropped["empty_oracle_text"] += 1
             continue
+        system_text, user_text = clean_prompt_text(prompt, SFT_SYSTEM_PROMPT)
         result.append(
             {
                 "messages": [
-                    {"role": "system", "content": SFT_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": oracle},
+                    {"from": "system", "value": system_text},
+                    {"from": "human", "value": user_text},
+                    {"from": "gpt", "value": oracle},
                 ],
                 "images": list(row.get("image_paths", [])),
                 "metadata": {
@@ -370,6 +371,7 @@ def export_dpo_rows(
         if not prompt or not oracle:
             rejected["missing_prompt_or_oracle"] += 1
             continue
+        system_text, user_text = clean_prompt_text(prompt, SFT_SYSTEM_PROMPT)
 
         negatives = _candidate_dpo_negatives(row, config)
         if not negatives:
@@ -393,17 +395,24 @@ def export_dpo_rows(
                 rejected["reward_gap_too_low"] += 1
                 continue
 
+            target_probability = compute_soft_target(
+                negative["reward_gap"],
+                beta=0.1,
+                min_target=0.55,
+                max_target=0.98,
+            )
+
             result.append(
                 {
                     "conversations": [
-                        {"role": "system", "content": SFT_SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
+                        {"from": "system", "value": system_text},
+                        {"from": "human", "value": user_text},
                     ],
-                    "chosen": {"role": "assistant", "content": oracle},
-                    "rejected": {"role": "assistant", "content": negative["text"]},
+                    "chosen": {"from": "gpt", "value": oracle},
+                    "rejected": {"from": "gpt", "value": negative["text"]},
                     "images": list(row.get("image_paths", [])),
                     "papo_weight": negative["weight"],
-                    "papo_target_probability": 1.0,
+                    "papo_target_probability": target_probability,
                     "metadata": {
                         "task_id": row.get("task_id", ""),
                         "group_id": row.get("group_id", ""),
@@ -421,6 +430,7 @@ def export_dpo_rows(
                         "semantic_similarity": negative["semantic_similarity"],
                         "intent_class": row.get("intent_class", ""),
                         "target_app": row.get("target_app", ""),
+                        "soft_target_beta": 0.1,
                     },
                 }
             )
@@ -459,6 +469,7 @@ def export_rerank_rows(
         if not prompt or not oracle:
             rejected["missing_prompt_or_oracle"] += 1
             continue
+        _, user_text = clean_prompt_text(prompt, RERANK_SYSTEM_PROMPT)
 
         candidates = _build_rerank_candidates(row)
         if len(candidates) < config.min_candidates:
@@ -488,18 +499,18 @@ def export_rerank_rows(
         result.append(
             {
                 "messages": [
-                    {"role": "system", "content": RERANK_SYSTEM_PROMPT},
+                    {"from": "system", "value": RERANK_SYSTEM_PROMPT},
                     {
-                        "role": "user",
-                        "content": (
-                            f"{prompt}\n\nCandidates:\n"
+                        "from": "human",
+                        "value": (
+                            f"{user_text}\n\nCandidates:\n"
                             + "\n".join(candidate_lines)
                             + "\n\nAnswer with only "
                             + ", ".join(letters[: len(ordered) - 1])
                             + f", or {letters[len(ordered) - 1]}."
                         ),
                     },
-                    {"role": "assistant", "content": correct_letter},
+                    {"from": "gpt", "value": correct_letter},
                 ],
                 "images": list(row.get("image_paths", [])),
                 "metadata": {
@@ -555,6 +566,7 @@ def export_weighted_listwise_rows(
         if not prompt or not oracle:
             rejected["missing_prompt_or_oracle"] += 1
             continue
+        system_text, user_text = clean_prompt_text(prompt, SFT_SYSTEM_PROMPT)
         group_candidates = _build_weighted_candidates(row)
         if len(group_candidates) < 2:
             rejected["too_few_candidates"] += 1
@@ -579,9 +591,9 @@ def export_weighted_listwise_rows(
             result.append(
                 {
                     "messages": [
-                        {"role": "system", "content": SFT_SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": candidate["text"]},
+                        {"from": "system", "value": system_text},
+                        {"from": "human", "value": user_text},
+                        {"from": "gpt", "value": candidate["text"]},
                     ],
                     "images": list(row.get("image_paths", [])),
                     "papo_listwise_weight": probability,
