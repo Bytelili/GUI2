@@ -31,7 +31,7 @@ def main() -> None:
     listwise_sums: dict[str, float] = {}
     for name, config in info.items():
         path = root / config["file_name"]
-        rows = json.loads(path.read_text(encoding="utf-8"))
+        rows = _load_rows(path)
         total += len(rows)
         for index, row in enumerate(rows):
             prompt = _prompt_text(row)
@@ -56,7 +56,12 @@ def main() -> None:
                 if not math.isfinite(weight) or not 0.0 < weight <= 1.0:
                     raise ValueError(f"{name}[{index}] has an invalid listwise weight")
                 metadata = row.get("metadata", {})
-                group = f"{metadata.get('tree_id', '')}::{metadata.get('node_id', '')}"
+                group = str(
+                    metadata.get("group_id")
+                    or metadata.get("preference_group_id")
+                    or metadata.get("task_id")
+                    or f"{metadata.get('tree_id', '')}::{metadata.get('node_id', '')}"
+                )
                 listwise_sums[group] = listwise_sums.get(group, 0.0) + weight
             if args.check_images:
                 missing_images.extend(image for image in images if not (root / image).exists())
@@ -74,6 +79,24 @@ def _prompt_text(row: dict[str, Any]) -> str:
         str(message.get("content") or message.get("value") or "")
         for message in row.get("messages", []) + row.get("conversations", [])
     )
+
+
+def _load_rows(path: Path) -> list[dict[str, Any]]:
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return []
+    if text.startswith("["):
+        data = json.loads(text)
+        if not isinstance(data, list):
+            raise ValueError(f"Expected JSON list in {path}")
+        return [row for row in data if isinstance(row, dict)]
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        if line.strip():
+            row = json.loads(line)
+            if isinstance(row, dict):
+                rows.append(row)
+    return rows
 
 
 if __name__ == "__main__":

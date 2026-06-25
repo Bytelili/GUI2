@@ -181,6 +181,35 @@ def dataset_info() -> dict[str, Any]:
             "file_name": f"papo_proactive_{partition}_sft.json",
             **mllm,
         }
+        result[f"papo_proactive_oracle_sft_{partition}"] = {
+            "file_name": f"proactive_fixed/proactive_oracle_sft_{partition}.jsonl",
+            **mllm,
+        }
+        result[f"papo_proactive_rerank_{partition}"] = {
+            "file_name": f"proactive_fixed/proactive_rerank_{partition}.jsonl",
+            **mllm,
+        }
+        result[f"papo_proactive_weighted_listwise_{partition}"] = {
+            "file_name": f"proactive_fixed/proactive_weighted_listwise_{partition}.jsonl",
+            **mllm,
+            "columns": {
+                **mllm["columns"],
+                "listwise_weight": "papo_listwise_weight",
+            },
+        }
+        result[f"papo_proactive_dpo_{partition}"] = {
+            "file_name": f"proactive_fixed/proactive_dpo_{partition}.jsonl",
+            "ranking": True,
+            "formatting": "sharegpt",
+            "columns": {
+                "messages": "conversations",
+                "chosen": "chosen",
+                "rejected": "rejected",
+                "images": "images",
+                "preference_weight": "papo_weight",
+                "preference_target": "papo_target_probability",
+            },
+        }
         result[f"papo_execution_{partition}_sft"] = {
             "file_name": f"papo_execution_{partition}_sft.json",
             **mllm,

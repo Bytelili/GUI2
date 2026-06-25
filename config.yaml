@@ -31,6 +31,29 @@ data:
   max_episodes_per_user: 0
   root_only: true
   progress_every: 25
+proactive_fixed:
+  enabled: true
+  input_wide_csv: ${PAPO_FIXED_INPUT_WIDE_CSV:-C:/Users/lenovo/Desktop/PAPO_Listwise_v4_workspace/releases/retrieval_only_v4_cleaned/20260624T102651Z/csv_exports/train_wide.csv}
+  output_dir: data/proactive_fixed
+  report_dir: reports/proactive_fixed
+  eval_ratio: 0.05
+  dpo:
+    max_pairs_per_row: 2
+    min_reward_gap: 0.05
+    min_char_similarity: 0.20
+    max_char_similarity: 0.98
+    same_user_min_similarity: 0.45
+    same_user_max_similarity: 0.95
+  rerank:
+    min_candidates: 2
+    shuffle_candidates: true
+    seed: 42
+  weighted_listwise:
+    enabled: true
+    temperature: 0.15
+    min_context_prob: 0.02
+    min_oracle_prob: 0.65
+    max_oracle_prob: 0.95
 papo:
   tree:
     max_depth: 3
@@ -67,6 +90,47 @@ training:
   cutoff_len: 4096
   image_max_pixels: 262144
   lora_rank: 16
+  proactive_oracle_sft_fixed:
+    output_name: proactive_oracle_sft_fixed
+    epochs: 3
+    learning_rate: 1.0e-4
+    per_device_train_batch_size: 8
+    per_device_eval_batch_size: 4
+    gradient_accumulation_steps: 2
+    gradient_checkpointing: false
+    eval_steps: 50
+  proactive_dpo_fixed:
+    output_name: proactive_dpo_fixed
+    epochs: 2
+    learning_rate: 5.0e-6
+    pref_beta: 0.1
+    pref_loss: papo
+    adapter_name_or_path: /home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo/proactive_oracle_sft_fixed_best
+    per_device_train_batch_size: 1
+    per_device_eval_batch_size: 1
+    gradient_accumulation_steps: 16
+    gradient_checkpointing: true
+    eval_steps: 25
+  proactive_rerank_fixed:
+    output_name: proactive_rerank_fixed
+    epochs: 2
+    learning_rate: 5.0e-5
+    per_device_train_batch_size: 8
+    per_device_eval_batch_size: 4
+    gradient_accumulation_steps: 2
+    gradient_checkpointing: false
+    eval_steps: 50
+  proactive_weighted_listwise_fixed:
+    output_name: proactive_weighted_listwise_fixed
+    epochs: 2
+    learning_rate: 1.0e-5
+    use_papo_listwise: true
+    adapter_name_or_path: /home/dumike/zyy/GUI2/LLaMA-Factory/saves/papo/proactive_oracle_sft_fixed_best
+    per_device_train_batch_size: 2
+    per_device_eval_batch_size: 2
+    gradient_accumulation_steps: 8
+    gradient_checkpointing: true
+    eval_steps: 25
   proactive_sft:
     epochs: 3
     learning_rate: 0.0001

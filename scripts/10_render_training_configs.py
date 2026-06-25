@@ -17,6 +17,12 @@ from papo.config import load_config  # noqa: E402
 
 DATASETS = {
     "proactive_sft": ("sft", "papo_proactive_train_sft", "papo_proactive_eval_sft"),
+    "proactive_oracle_sft_fixed": ("sft", "papo_proactive_oracle_sft_train", "papo_proactive_oracle_sft_eval"),
+    "proactive_dpo_fixed": ("dpo", "papo_proactive_dpo_train", "papo_proactive_dpo_eval"),
+    "proactive_rerank_fixed": ("sft", "papo_proactive_rerank_train", "papo_proactive_rerank_eval"),
+    (
+        "proactive_weighted_listwise_fixed"
+    ): ("sft", "papo_proactive_weighted_listwise_train", "papo_proactive_weighted_listwise_eval"),
     "execution_sft": ("sft", "papo_execution_train_sft", "papo_execution_eval_sft"),
     "execution_listwise": ("sft", "papo_execution_train_listwise", "papo_execution_eval_listwise"),
     "execution_dpo": ("dpo", "papo_execution_train_dpo", "papo_execution_eval_dpo"),
@@ -50,7 +56,7 @@ def _training_config(
     checkpoint_root = _portable_path(config, "checkpoint_root")
     logging_root = _portable_path(config, "logging_root")
     model_path = str(config.get("paths", {}).get("qwen_model_path") or training["model_name_or_path"])
-    run_name = f"{name}_clean_v2"
+    run_name = str(section.get("output_name") or f"{name}_clean_v2")
     eval_steps = int(section["eval_steps"])
     result: dict[str, Any] = {
         "model_name_or_path": model_path,
@@ -97,10 +103,14 @@ def _training_config(
     if stage == "dpo":
         result["pref_beta"] = section["pref_beta"]
         result["pref_loss"] = section.get("pref_loss", "sigmoid")
-        result["adapter_name_or_path"] = _join_path(checkpoint_root, "execution_listwise_clean_v2_best")
+        result["adapter_name_or_path"] = str(
+            section.get("adapter_name_or_path") or _join_path(checkpoint_root, "execution_listwise_clean_v2_best")
+        )
     if section.get("use_papo_listwise", False):
         result["use_papo_listwise"] = True
-        result["adapter_name_or_path"] = _join_path(checkpoint_root, "execution_sft_clean_v2_best")
+        result["adapter_name_or_path"] = str(
+            section.get("adapter_name_or_path") or _join_path(checkpoint_root, "execution_sft_clean_v2_best")
+        )
     return result
 
 
